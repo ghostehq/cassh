@@ -5,7 +5,7 @@
   <p>
     <a href="https://github.com/shawntz/cassh/releases"><img src="https://img.shields.io/github/v/release/shawntz/cassh" alt="Release"></a>
     <a href="https://github.com/shawntz/cassh/blob/main/LICENSE"><img src="https://img.shields.io/github/license/shawntz/cassh" alt="License"></a>
-    <a href="https://shawntz.github.io/cassh"><img src="https://img.shields.io/badge/docs-GitHub%20Pages-blue" alt="Documentation"></a>
+    <a href="https://shawnschwartz.com/cassh"><img src="https://img.shields.io/badge/docs-GitHub%20Pages-blue" alt="Documentation"></a>
   </p>
 </div>
 
@@ -48,21 +48,21 @@ make dev-ca
 make dev-server
 ```
 
-See the **[Full Documentation](https://shawntz.github.io/cassh)** for complete setup, deployment, and configuration guides.
+See the **[Full Documentation](https://shawnschwartz.com/cassh)** for complete setup, deployment, and configuration guides.
 
 ## Documentation
 
 | Guide | Description |
 |-------|-------------|
-| [Getting Started](https://shawntz.github.io/cassh/getting-started/) | Prerequisites and initial setup |
-| [Server Setup](https://shawntz.github.io/cassh/server-setup/) | CA keys, Entra app, configuration |
-| [Deployment](https://shawntz.github.io/cassh/deployment/) | Fly.io, Render, Railway, VPS |
-| [Client Distribution](https://shawntz.github.io/cassh/client/) | MDM deployment, PKG/DMG builds |
-| [Configuration Reference](https://shawntz.github.io/cassh/configuration/) | All config options explained |
+| [Getting Started](https://shawnschwartz.com/cassh/getting-started/) | Prerequisites and initial setup |
+| [Server Setup](https://shawnschwartz.com/cassh/server-setup/) | CA keys, Entra app, configuration |
+| [Deployment](https://shawnschwartz.com/cassh/deployment/) | Fly.io, Render, Railway, VPS |
+| [Client Distribution](https://shawnschwartz.com/cassh/client/) | MDM deployment, PKG/DMG builds |
+| [Configuration Reference](https://shawnschwartz.com/cassh/configuration/) | All config options explained |
 
 ## Roadmap
 
-See the [full roadmap](https://shawntz.github.io/cassh/roadmap/) for details.
+See the [full roadmap](https://shawnschwartz.com/cassh/roadmap/) for details.
 
 | Status | Feature |
 |--------|---------|
