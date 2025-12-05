@@ -11,15 +11,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Core Features
 - macOS menu bar app with certificate status indicator
 - OIDC authentication with Microsoft Entra ID
-- 12-hour SSH certificate signing
+- 12-hour SSH certificate signing (configurable)
 - Web server with meme landing page (LSP & Flash Slothmore)
-- Development mode for local testing
-- DMG and PKG installers for distribution
+- Development mode for local testing with mock authentication
+
+#### Menu Bar App
+- Terminal icon with macOS template icon support (auto dark/light mode)
+- Status indicators in dropdown menu (green/yellow/red)
+- One-click certificate generation/renewal
+- Auto SSH key generation (Ed25519)
+- ssh-agent integration for certificate loading
+
+#### Configuration
+- Environment variable support for cloud deployment
+- Split configuration model (policy vs user preferences)
+- TOML-based configuration files
+- Configurable certificate validity period
+
+#### Deployment
+- Dockerfile for containerized deployments
+- `render.yaml` for Render.com infrastructure-as-code
+- Makefile with comprehensive build targets
+- Support for Fly.io, Railway, Render, and self-hosted VPS
+
+#### Distribution
+- DMG installer with drag-and-drop installation
+- PKG installer for MDM deployment (Jamf, Kandji, etc.)
+- macOS app bundle with embedded policy
+- LaunchAgent for auto-start on login
+- App icon (`cassh.icns`) generated from terminal SVG
+
+#### Documentation
+- MkDocs Material documentation site
+- GitHub Pages deployment via GitHub Actions
+- Comprehensive guides: getting started, server setup, deployment, client distribution
+- Configuration reference with all options
+- Security best practices and threat model
+- Project roadmap with planned features
+
+#### CI/CD
+- GitHub Actions workflow for releases (triggered on `v*` tags)
+- GitHub Actions workflow for documentation deployment
+- Automated changelog parsing for release notes
+- macOS DMG and Linux binary builds
+
+#### Community
+- Apache 2.0 license
+- Code of Conduct (Contributor Covenant 2.0)
+- Contributing guidelines
+- Security policy with vulnerability reporting
+- Issue templates (bug report, feature request)
+- Pull request template
+- GitHub Sponsors funding configuration
 
 ### Security
 
 - Split configuration model (IT policy vs user preferences)
-- CSRF protection for OIDC flow
+- CSRF protection using cryptographic state parameter
 - Nonce verification to prevent replay attacks
+- Policy bundled in signed app bundles (enterprise mode)
+- Sensitive values loaded from environment variables in production
+- Loopback listener restricted to localhost connections
