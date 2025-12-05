@@ -22,7 +22,8 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
+        # Exclude cassh-menubar (macOS-only, requires systray which needs GTK on Linux)
+        run: go test -v -race -coverprofile=coverage.out $(go list ./... | grep -v /cmd/cassh-menubar)
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -45,6 +46,8 @@ jobs:
         uses: golangci/golangci-lint-action@v4
         with:
           version: latest
+          # Exclude cassh-menubar (macOS-only, requires systray which needs GTK on Linux)
+          args: --skip-dirs=cmd/cassh-menubar
 
   build-server:
     name: Build Server
