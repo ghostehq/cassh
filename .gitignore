@@ -30,3 +30,16 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+cassh.policy.toml
+cassh.policy.dev.toml
+ca_key
+ca_key.pub
+*.pem
+
+# Build artifacts
+build/
+dist/
+*.dmg
+*.pkg
+.DS_Store
