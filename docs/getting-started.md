@@ -77,8 +77,8 @@ make test
 # Build macOS app bundle
 make app-bundle
 
-# Create DMG installer
-make dmg
+# Create DMG installer (requires sudo)
+sudo make dmg
 
 # Create PKG for MDM
 make pkg

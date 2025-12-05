@@ -15,8 +15,8 @@ make menubar
 # Create the app bundle
 make app-bundle
 
-# Create DMG for manual distribution
-make dmg
+# Create DMG for manual distribution (requires sudo for disk image mounting)
+sudo make dmg
 
 # Create PKG for MDM deployment
 make pkg

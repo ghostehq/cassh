@@ -36,7 +36,7 @@ make build-enterprise    # Enterprise (locked policy)
 
 # macOS packaging
 make app-bundle   # Create cassh.app
-make dmg          # Create DMG installer
+sudo make dmg     # Create DMG installer (requires sudo)
 make pkg          # Create PKG for MDM deployment
 make sign         # Code sign (requires APPLE_DEVELOPER_ID)
 make notarize     # Notarize for Gatekeeper

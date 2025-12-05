@@ -101,7 +101,8 @@ app-bundle: menubar
 	@echo "App bundle created: $(APP_BUNDLE)"
 
 # =============================================================================
-# DMG Creation
+# DMG Creation (requires sudo for disk image mounting)
+# Usage: sudo make dmg
 # =============================================================================
 dmg: app-bundle
 	@echo "Creating DMG installer..."
