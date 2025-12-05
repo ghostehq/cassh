@@ -35,7 +35,7 @@ make build-oss           # OSS template (config editable)
 make build-enterprise    # Enterprise (locked policy)
 
 # macOS packaging (one-liner after configuring cassh.policy.toml)
-./build-release.sh
+./scripts/build-release
 
 # Or step-by-step:
 make app-bundle   # Create cassh.app

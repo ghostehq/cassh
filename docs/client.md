@@ -11,7 +11,7 @@ The menu bar app provides a visual indicator of certificate status and one-click
 **One-liner build script** (after configuring `cassh.policy.toml`):
 
 ```bash
-./build-release.sh
+./scripts/build-release
 ```
 
 This script validates your config, builds the binary, creates the app bundle, DMG, and PKG.

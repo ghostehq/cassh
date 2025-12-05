@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# build-release.sh - Build all cassh packages for distribution
+# build-release - Build all cassh packages for distribution
 #
-# Usage: ./build-release.sh
+# Usage: ./scripts/build-release
 #
 # Prerequisites:
 #   1. Configure cassh.policy.toml with your settings

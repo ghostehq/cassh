@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Automatic SSH config setup**: When generating a certificate, `cassh` now automatically adds the appropriate Host entry to `~/.ssh/config` for GitHub Enterprise
 - **System notifications**: macOS notifications for certificate activation, expiring soon (< 1 hour), and expired states
 - **GitHub Enterprise URL in policy**: Added `github_enterprise_url` field to policy config for SSH config auto-setup
-- **Build release script**: Added `build-release.sh` one-liner script to build all packages after configuring policy
+- **Build release script**: Added `scripts/build-release` one-liner script to build all packages after configuring policy
 - **Web page footer**: Added footer to landing and success pages with GitHub, Docs, Sponsor links, and copyright
 - **Setup CTA banner**: Added "Deploy `cassh` for your team" call-to-action on landing page linking to getting started guide
 
