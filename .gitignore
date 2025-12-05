@@ -40,8 +40,9 @@ ca_key.pub
 # Build artifacts
 build/
 dist/
-cassh-menubar
-cassh-server
+/cassh-menubar
+/cassh-server
+/cassh
 *.dmg
 *.pkg
 .DS_Store
