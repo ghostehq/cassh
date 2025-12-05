@@ -1,4 +1,4 @@
-# 💰 `cassh` 💰
+# `cassh` 💰💰💰
 
 ### Ephemeral SSH Certificates for GitHub Enterprise
 
@@ -11,7 +11,7 @@ Developed for [@ghostehq](https://github.com/ghostehq). Inspired by internal too
 2. Obtain a short-lived SSH certificate (12 hours)
 3. Certificate auto-expires - no revocation needed
 
-## Why cassh?
+## Why `cassh`?
 
 Permanent SSH keys are a liability. If a laptop is lost, stolen, or compromised:
 
