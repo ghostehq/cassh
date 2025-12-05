@@ -5,5 +5,8 @@
 # Where your cassh server is running
 server_base_url = "https://cassh.yourcompany.com"
 
+# GitHub Enterprise URL (required for automatic SSH config setup)
+github_enterprise_url = "https://github.yourcompany.com"
+
 # Certificate validity (informational - server enforces this)
 cert_validity_hours = 12

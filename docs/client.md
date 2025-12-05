@@ -93,8 +93,11 @@ Create the policy file:
 mkdir -p ~/Library/Application\ Support/cassh
 cat > ~/Library/Application\ Support/cassh/cassh.policy.toml << 'EOF'
 server_base_url = "https://cassh.yourcompany.com"
+github_enterprise_url = "https://github.yourcompany.com"
 EOF
 ```
+
+The `github_enterprise_url` is required for automatic SSH config setup. When you generate a certificate, `cassh` will automatically add the correct SSH config entry for your GitHub Enterprise instance.
 
 ### Auto-Start on Login
 
@@ -189,3 +192,60 @@ Certificates are valid for 12 hours. The app will notify you before expiration.
 | Browser doesn't open | Check if default browser is set |
 | "Server unreachable" | Check network/VPN connection |
 | SSH still fails | Run `ssh-add -l` to verify cert is loaded |
+
+---
+
+## Git SSH Configuration
+
+`cassh` automatically configures your SSH config when you generate a certificate (if `github_enterprise_url` is set in your policy). However, you also need to ensure your Git repositories are using SSH URLs.
+
+### Check Your Remote URL
+
+```bash
+git remote -v
+```
+
+If you see `https://github.yourcompany.com/...`, you need to switch to SSH.
+
+### Switch to SSH URL
+
+```bash
+# For GitHub Enterprise
+git remote set-url origin git@github.yourcompany.com:org/repo.git
+```
+
+### What cassh Configures Automatically
+
+When you generate a certificate, `cassh` adds an entry to `~/.ssh/config`:
+
+```
+Host github.yourcompany.com
+    HostName github.yourcompany.com
+    User git
+    IdentityFile ~/.ssh/cassh_id_ed25519
+    IdentitiesOnly yes
+```
+
+This ensures Git uses your cassh certificate for authentication.
+
+### Verify SSH Connection
+
+```bash
+# Test SSH connection to GitHub Enterprise
+ssh -T git@github.yourcompany.com
+
+# Verify cert is loaded in ssh-agent
+ssh-add -l
+```
+
+You should see your key with `[CERT]` next to it.
+
+### System Notifications
+
+cassh sends macOS notifications for:
+
+- **Certificate Activated** - When a new certificate is installed
+- **Certificate Expiring** - When your certificate has less than 1 hour remaining
+- **Certificate Expired** - When your certificate has expired
+
+Click the menu bar icon to renew your certificate when notified.

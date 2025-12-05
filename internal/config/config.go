@@ -30,6 +30,9 @@ type PolicyConfig struct {
 	// Server endpoints
 	ServerBaseURL string `toml:"server_base_url"`
 
+	// GitHub Enterprise
+	GitHubEnterpriseURL string `toml:"github_enterprise_url"`
+
 	// OIDC / Entra settings
 	OIDCIssuer   string `toml:"oidc_issuer"`
 	OIDCClientID string `toml:"oidc_client_id"`

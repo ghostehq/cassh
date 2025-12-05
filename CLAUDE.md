@@ -76,7 +76,7 @@ packaging/macos/      # macOS distribution files
 
 | Config | Location | Editable | Contains |
 |--------|----------|----------|----------|
-| Policy | `cassh.policy.toml` (bundled in app) | No | CA key, cert validity, OIDC settings |
+| Policy | `cassh.policy.toml` (bundled in app) | No | CA key, cert validity, OIDC settings, GHE URL |
 | User | `~/Library/Application Support/cassh/config.toml` | Yes | UI prefs, refresh interval |
 
 ## Key Files
