@@ -197,15 +197,71 @@
             cursor: not-allowed;
         }
 
-        .footer {
+        .generate-link {
             margin-top: 1.5rem;
             color: #444;
             font-size: 0.8rem;
             text-align: center;
         }
 
+        .generate-link a {
+            color: #666;
+        }
+
+        .footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 1rem;
+            text-align: center;
+            font-size: 0.75rem;
+            color: #444;
+            background: linear-gradient(transparent, #0a0a0a 30%);
+        }
+
         .footer a {
             color: #666;
+            text-decoration: none;
+            transition: color 0.15s;
+        }
+
+        .footer a:hover {
+            color: #888;
+        }
+
+        .footer-links {
+            margin-bottom: 0.5rem;
+        }
+
+        .footer-links a {
+            margin: 0 0.75rem;
+        }
+
+        .sponsor-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            background: #21262d;
+            border: 1px solid #363b42;
+            color: #c9d1d9;
+            padding: 0.35rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            text-decoration: none;
+            margin-top: 0.5rem;
+            transition: border-color 0.15s;
+        }
+
+        .sponsor-btn:hover {
+            border-color: #db61a2;
+            color: #db61a2;
+        }
+
+        .sponsor-btn svg {
+            width: 14px;
+            height: 14px;
+            fill: #db61a2;
         }
     </style>
 </head>
@@ -253,10 +309,22 @@
             Install to cassh.app
         </button>
 
-        <p class="footer">
+        <p class="generate-link">
             <a href="/">Generate another</a>
         </p>
     </div>
+
+    <footer class="footer">
+        <div class="footer-links">
+            <a href="https://github.com/shawntz/cassh" target="_blank">GitHub</a>
+            <a href="https://shawnschwartz.com/cassh" target="_blank">Docs</a>
+        </div>
+        <a href="https://github.com/sponsors/shawntz" target="_blank" class="sponsor-btn">
+            <svg viewBox="0 0 16 16"><path d="M4.25 2.5c-1.336 0-2.75 1.164-2.75 3 0 2.15 1.58 4.144 3.365 5.682A20.565 20.565 0 008 13.393a20.561 20.561 0 003.135-2.211C12.92 9.644 14.5 7.65 14.5 5.5c0-1.836-1.414-3-2.75-3-1.373 0-2.609.986-3.029 2.456a.75.75 0 01-1.442 0C6.859 3.486 5.623 2.5 4.25 2.5z"></path></svg>
+            Sponsor
+        </a>
+        <div style="margin-top: 0.5rem;">© 2025 Shawn Schwartz. Open source under Apache 2.0</div>
+    </footer>
 
     <script>
         function copyCert() {
