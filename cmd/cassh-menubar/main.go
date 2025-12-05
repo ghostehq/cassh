@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"time"
 
@@ -24,7 +26,8 @@ import (
 )
 
 const (
-	loopbackPort = 52849 // cassh loopback listener port
+	loopbackPort       = 52849       // cassh loopback listener port
+	expiryWarningTime  = time.Hour   // Warn when cert expires within this duration
 )
 
 var (
@@ -37,10 +40,13 @@ var (
 
 // CertStatus tracks the current cert state
 type CertStatus struct {
-	Valid       bool
-	TimeLeft    time.Duration
-	ValidBefore time.Time
-	LastCheck   time.Time
+	Valid              bool
+	TimeLeft           time.Duration
+	ValidBefore        time.Time
+	LastCheck          time.Time
+	NotifiedActivation bool  // Track if we've notified about activation
+	NotifiedExpiring   bool  // Track if we've notified about expiring soon
+	NotifiedExpired    bool  // Track if we've notified about expiration
 }
 
 func main() {
@@ -129,22 +135,39 @@ func updateCertStatus() {
 	// Check if cert file exists
 	certData, err := os.ReadFile(certPath)
 	if err != nil {
-		setStatusInvalid("No certificate found")
+		setStatusInvalid("No certificate found", false)
 		return
 	}
 
 	// Parse cert
 	cert, err := ca.ParseCertificate(certData)
 	if err != nil {
-		setStatusInvalid("Invalid certificate")
+		setStatusInvalid("Invalid certificate", false)
 		return
 	}
 
 	// Check validity
 	info := ca.GetCertInfo(cert)
 	if info.IsExpired {
-		setStatusInvalid("Certificate expired")
+		setStatusInvalid("Certificate expired", true)
 		return
+	}
+
+	// Cert is valid - reset expired notification flag
+	certStatus.NotifiedExpired = false
+
+	// Check if expiring soon (within warning time)
+	if info.TimeLeft <= expiryWarningTime {
+		if !certStatus.NotifiedExpiring {
+			mins := int(info.TimeLeft.Minutes())
+			sendNotification("cassh Certificate Expiring",
+				fmt.Sprintf("Your SSH certificate expires in %d minutes. Click the menu bar icon to renew.", mins),
+				true)
+			certStatus.NotifiedExpiring = true
+		}
+	} else {
+		// Reset expiring notification if we're no longer in the warning window
+		certStatus.NotifiedExpiring = false
 	}
 
 	// Cert is valid
@@ -166,11 +189,19 @@ func updateCertStatus() {
 	setIconGreen()
 }
 
-func setStatusInvalid(reason string) {
+func setStatusInvalid(reason string, isExpired bool) {
 	certStatus.Valid = false
 	certStatus.TimeLeft = 0
 	menuStatus.SetTitle(fmt.Sprintf("🔴 %s", reason))
 	setIconRed()
+
+	// Send expired notification only once
+	if isExpired && !certStatus.NotifiedExpired {
+		sendNotification("cassh Certificate Expired",
+			"Your SSH certificate has expired. Click the menu bar icon to generate a new one.",
+			true)
+		certStatus.NotifiedExpired = true
+	}
 }
 
 func setIconGreen() {
@@ -255,17 +286,123 @@ func ensureSSHKey(keyPath string) error {
 	return nil
 }
 
-func openBrowser(url string) error {
+// ensureSSHConfig ensures the SSH config has the correct Host entry for GitHub Enterprise
+func ensureSSHConfig(gheURL string, keyPath string) error {
+	if gheURL == "" {
+		return nil // No GHE URL configured
+	}
+
+	// Parse the GHE URL to get the hostname
+	parsed, err := url.Parse(gheURL)
+	if err != nil {
+		return fmt.Errorf("failed to parse GHE URL: %w", err)
+	}
+	gheHost := parsed.Hostname()
+	if gheHost == "" {
+		return fmt.Errorf("invalid GHE URL: no hostname")
+	}
+
+	// SSH config path
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home dir: %w", err)
+	}
+	sshConfigPath := filepath.Join(homeDir, ".ssh", "config")
+
+	// Ensure .ssh directory exists
+	sshDir := filepath.Dir(sshConfigPath)
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		return fmt.Errorf("failed to create .ssh directory: %w", err)
+	}
+
+	// Check if config file exists and if it already has this host
+	if _, err := os.Stat(sshConfigPath); err == nil {
+		// File exists, check for existing host entry
+		hasHost, err := sshConfigHasHost(sshConfigPath, gheHost)
+		if err != nil {
+			return fmt.Errorf("failed to check SSH config: %w", err)
+		}
+		if hasHost {
+			log.Printf("SSH config already has entry for %s", gheHost)
+			return nil
+		}
+	}
+
+	// Append the host entry
+	hostEntry := fmt.Sprintf(`
+# Added by cassh for GitHub Enterprise SSH certificate auth
+Host %s
+    HostName %s
+    User git
+    IdentityFile %s
+    IdentitiesOnly yes
+`, gheHost, gheHost, keyPath)
+
+	f, err := os.OpenFile(sshConfigPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to open SSH config: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(hostEntry); err != nil {
+		return fmt.Errorf("failed to write SSH config: %w", err)
+	}
+
+	log.Printf("Added SSH config entry for %s", gheHost)
+	return nil
+}
+
+// sshConfigHasHost checks if the SSH config already has a Host entry for the given hostname
+func sshConfigHasHost(configPath string, hostname string) (bool, error) {
+	f, err := os.Open(configPath)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	// Match "Host hostname" or "Host *hostname*" patterns
+	hostPattern := regexp.MustCompile(`(?i)^\s*Host\s+.*\b` + regexp.QuoteMeta(hostname) + `\b`)
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if hostPattern.MatchString(line) {
+			return true, nil
+		}
+	}
+
+	return false, scanner.Err()
+}
+
+func openBrowser(urlStr string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", url)
+		cmd = exec.Command("open", urlStr)
 	case "linux":
-		cmd = exec.Command("xdg-open", url)
+		cmd = exec.Command("xdg-open", urlStr)
 	default:
 		return fmt.Errorf("unsupported platform")
 	}
 	return cmd.Start()
+}
+
+// sendNotification sends a macOS notification
+// If actionOnClick is true and the notification is clicked, it will trigger cert generation
+func sendNotification(title, message string, actionOnClick bool) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+
+	// Use osascript to send notification
+	script := fmt.Sprintf(`display notification %q with title %q`, message, title)
+	cmd := exec.Command("osascript", "-e", script)
+	if err := cmd.Run(); err != nil {
+		log.Printf("Failed to send notification: %v", err)
+	}
+
+	// Note: macOS notifications don't support click actions via osascript
+	// The user can click the menu bar icon to regenerate
 }
 
 func showAbout() {
@@ -340,7 +477,21 @@ func handleInstallCert(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Warning: ssh-add failed: %v", err)
 	}
 
+	// Ensure SSH config has the correct Host entry for GHE
+	if err := ensureSSHConfig(cfg.Policy.GitHubEnterpriseURL, keyPath); err != nil {
+		log.Printf("Warning: failed to configure SSH config: %v", err)
+	}
+
 	log.Println("Certificate installed successfully")
+
+	// Send activation notification
+	sendNotification("cassh Certificate Activated",
+		"Your SSH certificate is now active and ready to use.",
+		false)
+
+	// Reset notification flags for new cert
+	certStatus.NotifiedExpiring = false
+	certStatus.NotifiedExpired = false
 
 	// Update status immediately
 	go updateCertStatus()
