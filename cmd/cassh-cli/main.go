@@ -260,7 +260,7 @@ func pollForCert(ctx context.Context) (string, error) {
 			if err != nil {
 				continue // Loopback not available
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			var status struct {
 				Valid bool `json:"valid"`
@@ -342,14 +342,14 @@ func openBrowser(url string) {
 		cmd = exec.Command("xdg-open", url)
 	}
 	if cmd != nil {
-		cmd.Start()
+		_ = cmd.Start()
 	}
 }
 
 func outputResult(data interface{}) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	enc.Encode(data)
+	_ = enc.Encode(data)
 }
 
 func formatDuration(d time.Duration) string {

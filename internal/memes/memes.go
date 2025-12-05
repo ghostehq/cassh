@@ -3,13 +3,8 @@
 package memes
 
 import (
-	"math/rand"
-	"time"
+	"math/rand/v2"
 )
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
 
 type Character struct {
 	Name       string
@@ -75,7 +70,7 @@ var Characters = []Character{
 }
 
 func GetRandomCharacter() Character {
-	return Characters[rand.Intn(len(Characters))]
+	return Characters[rand.IntN(len(Characters))]
 }
 
 func GetCharacterByName(name string) Character {
@@ -90,7 +85,7 @@ func GetCharacterByName(name string) Character {
 }
 
 func GetRandomQuote(c Character) string {
-	return c.Quotes[rand.Intn(len(c.Quotes))]
+	return c.Quotes[rand.IntN(len(c.Quotes))]
 }
 
 // MemeData is passed to templates for rendering
