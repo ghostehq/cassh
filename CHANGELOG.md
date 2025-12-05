@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Automatic SSH config setup**: When generating a certificate, `cassh` now automatically adds the appropriate Host entry to `~/.ssh/config` for GitHub Enterprise
+- **System notifications**: macOS notifications for certificate activation, expiring soon (< 1 hour), and expired states
+- **GitHub Enterprise URL in policy**: Added `github_enterprise_url` field to policy config for SSH config auto-setup
+- **Build release script**: Added `build-release.sh` one-liner script to build all packages after configuring policy
+- **Web page footer**: Added footer to landing and success pages with GitHub, Docs, Sponsor links, and copyright
+- **Setup CTA banner**: Added "Deploy `cassh` for your team" call-to-action on landing page linking to getting started guide
+
 #### Core Features
 - macOS menu bar app with certificate status indicator
 - OIDC authentication with Microsoft Entra ID
@@ -75,3 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Policy bundled in signed app bundles (enterprise mode)
 - Sensitive values loaded from environment variables in production
 - Loopback listener restricted to localhost connections
+
+### Fixed
+
+- golangci-lint v2 configuration: Added `//go:build darwin` build tag to menubar app to fix Linux CI builds
+- CA private key parsing: Handle escaped newlines (`\n`) in environment variables for cloud deployments (Render, etc.)
