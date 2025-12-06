@@ -7,7 +7,9 @@
     <key>CFBundleExecutable</key>
     <string>cassh</string>
     <key>CFBundleIconFile</key>
-    <string>cassh.icns</string>
+    <string>cassh</string>
+    <key>CFBundleIconName</key>
+    <string>cassh</string>
     <key>CFBundleIdentifier</key>
     <string>com.shawnschwartz.cassh</string>
     <key>CFBundleInfoDictionaryVersion</key>

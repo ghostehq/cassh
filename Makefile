@@ -25,7 +25,7 @@ POLICY_FILE ?= cassh.policy.example.toml
 
 .PHONY: all clean deps build build-oss build-enterprise \
         server menubar cli \
-        app-bundle app-bundle-oss app-bundle-enterprise \
+        icon app-bundle app-bundle-oss app-bundle-enterprise \
         dmg dmg-only pkg pkg-only \
         sign notarize \
         test lint
@@ -77,6 +77,40 @@ build-enterprise: build
 	@echo "Enterprise build complete: $(DIST_DIR)/enterprise/"
 
 # =============================================================================
+# macOS Icon Compilation (Liquid Glass support)
+# =============================================================================
+# Compiles .icon bundle (from Icon Composer) into Assets.car and fallback .icns
+# Requires Xcode command line tools (actool)
+icon:
+	@echo "Compiling icon assets..."
+	@if [ ! -d packaging/macos/icon/cassh.icon ]; then \
+		echo "Error: packaging/macos/icon/cassh.icon not found"; \
+		echo "Create it using Icon Composer (Xcode 16+)"; \
+		exit 1; \
+	fi
+	@actool packaging/macos/icon/cassh.icon \
+		--compile packaging/macos \
+		--output-format human-readable-text \
+		--notices --warnings --errors \
+		--output-partial-info-plist packaging/macos/assetcatalog_generated_info.plist \
+		--app-icon cassh \
+		--include-all-app-icons \
+		--enable-on-demand-resources NO \
+		--development-region en \
+		--target-device mac \
+		--minimum-deployment-target 15.0 \
+		--platform macosx
+	@rm -f packaging/macos/assetcatalog_generated_info.plist
+	@# Copy macOS Default PNG to docs assets for README and docs site
+	@if [ -f packaging/macos/icon/icon_exports/cassh-macOS-Default-1024x1024@1x.png ]; then \
+		cp packaging/macos/icon/icon_exports/cassh-macOS-Default-1024x1024@1x.png docs/assets/logo.png; \
+	fi
+	@echo "Icon assets compiled:"
+	@echo "  - packaging/macos/Assets.car (liquid glass)"
+	@echo "  - packaging/macos/cassh.icns (fallback)"
+	@echo "  - docs/assets/logo.png (for README/docs)"
+
+# =============================================================================
 # macOS App Bundle
 # =============================================================================
 # Default app-bundle uses POLICY_FILE variable (defaults to example for OSS)
@@ -97,7 +131,10 @@ app-bundle: menubar
 		sed 's/{{VERSION}}/$(VERSION)/g' | \
 		sed 's/{{BUILD_TIME}}/$(BUILD_TIME)/g' > $(APP_BUNDLE)/Contents/Info.plist
 
-	# Copy icon if exists
+	# Copy Assets.car (compiled icon with liquid glass support) and fallback icns
+	@if [ -f packaging/macos/Assets.car ]; then \
+		cp packaging/macos/Assets.car $(APP_BUNDLE)/Contents/Resources/; \
+	fi
 	@if [ -f packaging/macos/cassh.icns ]; then \
 		cp packaging/macos/cassh.icns $(APP_BUNDLE)/Contents/Resources/; \
 	fi
