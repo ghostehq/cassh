@@ -574,10 +574,11 @@
             }
         }
 
-        // Meme quotes
+        // Meme quotes - LSP and Flash Slothmore
         const mascots = [
             {
-                image: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="50" x="50" text-anchor="middle" font-size="60">👸</text></svg>',
+                image: "/static/images/lsp.png",
+                name: "LSP",
                 quotes: [
                     "Oh my glob, your SSH keys are like, SO expired!",
                     "Whatever, I'm getting cheese fries... after I renew your cert.",
@@ -586,7 +587,8 @@
                 ]
             },
             {
-                image: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="50" x="50" text-anchor="middle" font-size="60">🦥</text></svg>',
+                image: "/static/images/sloth.png",
+                name: "Flash",
                 quotes: [
                     "Let... me... check... your... certificate... status...",
                     "Ha... ha... ha... your key... rotated...",
@@ -602,7 +604,7 @@
             const quote = mascot.quotes[Math.floor(Math.random() * mascot.quotes.length)];
             const container = document.getElementById('mascot');
             container.innerHTML = `
-                <img src="${mascot.image}" alt="Mascot" onerror="this.style.display='none'">
+                <img src="${mascot.image}" alt="${mascot.name}" onerror="this.style.display='none'">
                 <div class="mascot-quote">"${quote}"</div>
             `;
         }
@@ -639,7 +641,7 @@
             <svg viewBox="0 0 16 16"><path d="M4.25 2.5c-1.336 0-2.75 1.164-2.75 3 0 2.15 1.58 4.144 3.365 5.682A20.565 20.565 0 008 13.393a20.561 20.561 0 003.135-2.211C12.92 9.644 14.5 7.65 14.5 5.5c0-1.836-1.414-3-2.75-3-1.373 0-2.609.986-3.029 2.456a.75.75 0 01-1.442 0C6.859 3.486 5.623 2.5 4.25 2.5z"></path></svg>
             Sponsor
         </a>
-        <div style="margin-top: 0.5rem;">© 2025 Shawn Schwartz. Open source under Apache 2.0</div>
+        <div style="margin-top: 0.5rem;">© 2025 <a href="https://shawnschwartz.com" target="_blank">Shawn Schwartz</a>. Open source under Apache 2.0</div>
     </footer>
 </body>
 </html>

@@ -177,24 +177,46 @@
 
         .auto-install-btn {
             width: 100%;
-            background: #fff;
-            color: #000;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: #fff;
             border: none;
-            padding: 0.875rem;
-            font-size: 0.95rem;
-            font-weight: 500;
-            border-radius: 8px;
+            padding: 1.25rem 1.5rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-radius: 12px;
             cursor: pointer;
-            transition: opacity 0.15s;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 14px rgba(34, 197, 94, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
         }
 
         .auto-install-btn:hover {
-            opacity: 0.9;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(34, 197, 94, 0.5);
+        }
+
+        .auto-install-btn:active {
+            transform: translateY(0);
         }
 
         .auto-install-btn:disabled {
-            opacity: 0.5;
+            opacity: 0.6;
             cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .auto-install-btn .badge {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .generate-link {
@@ -274,9 +296,20 @@
         <h1>Certificate ready</h1>
         <p class="user-info">{{.User.Email}}</p>
 
-        <div class="quote">
-            "{{.Meme.Quote}}"
-        </div>
+        <button class="auto-install-btn" onclick="autoInstall()">
+            Install to cassh.app
+            <span class="badge">Recommended</span>
+        </button>
+
+        <p class="generate-link" style="margin-top: 1.5rem; margin-bottom: 1rem;">or install manually...</p>
+
+        <div class="instructions">
+            <h3>Manual install</h3>
+            <ol>
+                <li>Save to <code>~/.ssh/cassh_id_ed25519-cert.pub</code></li>
+                <li>Run <code>ssh-add ~/.ssh/cassh_id_ed25519</code></li>
+            </ol>
+        </div> 
 
         <div class="cert-box">
             <div class="cert-header">
@@ -295,19 +328,7 @@
                     <div class="info-value">{{printf "%.0f" .CertInfo.TimeLeft.Hours}}h</div>
                 </div>
             </div>
-        </div>
-
-        <div class="instructions">
-            <h3>Manual install</h3>
-            <ol>
-                <li>Save to <code>~/.ssh/cassh_id_ed25519-cert.pub</code></li>
-                <li>Run <code>ssh-add ~/.ssh/cassh_id_ed25519</code></li>
-            </ol>
-        </div>
-
-        <button class="auto-install-btn" onclick="autoInstall()">
-            Install to cassh.app
-        </button>
+        </div> 
 
         <p class="generate-link">
             <a href="/">Generate another</a>
@@ -323,7 +344,7 @@
             <svg viewBox="0 0 16 16"><path d="M4.25 2.5c-1.336 0-2.75 1.164-2.75 3 0 2.15 1.58 4.144 3.365 5.682A20.565 20.565 0 008 13.393a20.561 20.561 0 003.135-2.211C12.92 9.644 14.5 7.65 14.5 5.5c0-1.836-1.414-3-2.75-3-1.373 0-2.609.986-3.029 2.456a.75.75 0 01-1.442 0C6.859 3.486 5.623 2.5 4.25 2.5z"></path></svg>
             Sponsor
         </a>
-        <div style="margin-top: 0.5rem;">© 2025 Shawn Schwartz. Open source under Apache 2.0</div>
+        <div style="margin-top: 0.5rem;">© 2025 <a href="https://shawnschwartz.com" target="_blank">Shawn Schwartz</a>. Open source under Apache 2.0</div>
     </footer>
 
     <script>
@@ -340,29 +361,59 @@
         async function autoInstall() {
             const cert = document.getElementById('certData').value;
             const btn = document.querySelector('.auto-install-btn');
+            const originalHTML = btn.innerHTML;
 
-            btn.textContent = 'Installing...';
+            btn.innerHTML = 'Installing...';
             btn.disabled = true;
 
-            try {
-                const response = await fetch('http://localhost:52849/install-cert', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ cert: cert }),
-                });
+            // Try localhost first, then 127.0.0.1 as fallback
+            const endpoints = [
+                'http://localhost:52849/install-cert',
+                'http://127.0.0.1:52849/install-cert'
+            ];
 
-                if (response.ok) {
-                    btn.textContent = 'Installed';
-                } else {
-                    throw new Error();
+            let lastError = null;
+            for (const endpoint of endpoints) {
+                try {
+                    const response = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ cert: cert }),
+                    });
+
+                    if (response.ok) {
+                        btn.innerHTML = 'Installed ✓';
+                        btn.style.background = 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)';
+                        return;
+                    } else {
+                        const text = await response.text();
+                        lastError = new Error(text || 'Server error');
+                    }
+                } catch (err) {
+                    lastError = err;
                 }
-            } catch (err) {
-                btn.textContent = 'cassh.app not running';
-                setTimeout(() => {
-                    btn.textContent = 'Install to cassh.app';
-                    btn.disabled = false;
-                }, 2000);
             }
+
+            // Determine error message based on error type
+            let errorMsg = 'cassh.app not running';
+            if (lastError) {
+                console.error('Auto-install failed:', lastError);
+                if (lastError.message && lastError.message.includes('Mixed Content')) {
+                    errorMsg = 'Browser blocked (mixed content)';
+                } else if (lastError.message && lastError.message.includes('Invalid')) {
+                    errorMsg = 'Invalid certificate';
+                }
+            }
+
+            btn.innerHTML = errorMsg;
+            btn.style.background = 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)';
+            btn.style.boxShadow = '0 4px 14px rgba(220, 38, 38, 0.4)';
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+                btn.style.background = '';
+                btn.style.boxShadow = '';
+                btn.disabled = false;
+            }, 3000);
         }
     </script>
 </body>
