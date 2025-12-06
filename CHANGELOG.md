@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2025-12-05
 
+### Initial Release! 🎉
+
+`cassh`: SSH Key & Certificate Manager for GitHub.
+
+> Whether you're a solo developer managing personal projects or an enterprise team with hundreds of engineers,
+cassh brings security best practices to your SSH workflow — without the complexity.
+
+
+### Summary of Core Features
+
+- macOS menu bar app with status indicator (green/yellow/red)
+- **Enterprise mode**: SSH certificates signed by internal CA (12-hour default validity)
+- **Personal mode**: SSH keys via `gh` CLI with automatic rotation
+- OIDC authentication with Microsoft Entra ID (enterprise)
+- Web server with meme landing page (LSP & Flash Slothmore)
+- Development mode for local testing with mock authentication
+
 ### Added
 
 - **Personal GitHub.com support**: Manage SSH keys for personal GitHub accounts without a server
@@ -24,15 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Build release script**: Added `scripts/build-release` one-liner script to build all packages after configuring policy
 - **Web page footer**: Added footer to landing and success pages with GitHub, Docs, Sponsor links, and copyright
 - **Setup CTA banner**: Added "Deploy `cassh` for your team" call-to-action on landing page linking to getting started guide
-
-### Core Features
-
-- macOS menu bar app with status indicator (green/yellow/red)
-- **Enterprise mode**: SSH certificates signed by internal CA (12-hour default validity)
-- **Personal mode**: SSH keys via `gh` CLI with automatic rotation
-- OIDC authentication with Microsoft Entra ID (enterprise)
-- Web server with meme landing page (LSP & Flash Slothmore)
-- Development mode for local testing with mock authentication
 
 ### Menu Bar App
 
@@ -64,7 +72,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - macOS app bundle with embedded policy
 - LaunchAgent for auto-start on login
 - Homebrew Cask support (`brew install --cask cassh`)
-- App icon (`cassh.icns`)
+- **Liquid glass icon**: macOS 15+ dynamic icon with translucency effects (via Icon Composer)
+- `make icon` target to compile `.icon` bundle to `Assets.car` using `actool`
+- Fallback `.icns` for older macOS versions
 
 ### Documentation
 
