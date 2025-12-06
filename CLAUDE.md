@@ -4,7 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`cassh` is an ephemeral SSH certificate system for GitHub Enterprise access. It issues time-bound SSH certificates (12-hour validity) signed by an internal CA, eliminating the need for permanent SSH keys and manual revocation.
+`cassh` is an SSH key and certificate manager for GitHub, supporting both personal GitHub.com accounts and GitHub Enterprise organizations.
+
+**Two modes of operation:**
+
+| Mode | Authentication | Server Required | Key Lifecycle |
+|------|----------------|-----------------|---------------|
+| **GitHub Enterprise** | SSH Certificates (CA-signed) | Yes | 12-hour validity (configurable) |
+| **GitHub.com Personal** | SSH Keys (via `gh` CLI) | No | Configurable rotation (4h to 90 days) |
+
+Users can run both modes simultaneously - enterprise for work, personal for side projects.
 
 ## Build Commands
 
@@ -39,8 +48,7 @@ make build-enterprise    # Enterprise (locked policy)
 
 # Or step-by-step:
 make app-bundle   # Create cassh.app
-sudo make dmg     # Create DMG installer (requires sudo)
-make pkg          # Create PKG for MDM deployment
+make pkg          # Create PKG installer
 make sign         # Code sign (requires APPLE_DEVELOPER_ID)
 make notarize     # Notarize for Gatekeeper
 
@@ -118,9 +126,11 @@ packaging/macos/      # macOS distribution files
 - `APPLE_APP_PASSWORD` - App-specific password
 - `APPLE_TEAM_ID` - Team ID
 
-## Auth Flow
+## Auth Flows
 
-1. User clicks terminal icon in menu bar, selects "Generate / Renew Cert"
+### Enterprise Flow (SSH Certificates)
+
+1. User clicks terminal icon in menu bar, selects enterprise connection
 2. Menubar ensures `~/.ssh/cassh_id_ed25519` exists, reads pubkey
 3. Opens browser to `https://cassh.example.com/?pubkey=<pubkey>`
 4. Landing page shows LSP or Sloth meme with SSO button
@@ -129,6 +139,16 @@ packaging/macos/      # macOS distribution files
 7. Browser can POST cert to loopback listener for auto-install
 8. Menubar writes cert to `~/.ssh/cassh_id_ed25519-cert.pub`, runs `ssh-add`
 9. Dropdown menu shows green status indicator
+
+### Personal Flow (SSH Keys via gh CLI)
+
+1. User launches app → Setup wizard opens (first run)
+2. User selects "Personal GitHub.com" and enters GitHub username
+3. Menubar generates Ed25519 SSH key (`~/.ssh/cassh_personal_<username>`)
+4. Key is uploaded to GitHub via `gh ssh-key add`
+5. `~/.ssh/config` is automatically configured for GitHub.com
+6. Key age is tracked; rotation happens per user-selected policy
+7. On rotation: old key deleted from GitHub, new key generated and uploaded
 
 ## Static Assets
 
