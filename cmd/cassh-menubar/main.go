@@ -639,6 +639,101 @@ func sshConfigHasHost(configPath string, hostname string) (bool, error) {
 	return false, scanner.Err()
 }
 
+// sshConfigHasCorrectKey checks if the SSH config for a hostname has the correct IdentityFile
+func sshConfigHasCorrectKey(configPath string, hostname string, expectedKeyPath string) (bool, error) {
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return false, err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	hostPattern := regexp.MustCompile(`(?i)^\s*Host\s+.*\b` + regexp.QuoteMeta(hostname) + `\b`)
+	identityPattern := regexp.MustCompile(`(?i)^\s*IdentityFile\s+(.+)`)
+
+	inHostBlock := false
+	for _, line := range lines {
+		if hostPattern.MatchString(line) {
+			inHostBlock = true
+			continue
+		}
+		// Check if we've entered a new Host block
+		if inHostBlock && regexp.MustCompile(`(?i)^\s*Host\s+`).MatchString(line) {
+			break // Moved to another host block
+		}
+		if inHostBlock {
+			if matches := identityPattern.FindStringSubmatch(line); len(matches) > 1 {
+				currentKeyPath := strings.TrimSpace(matches[1])
+				return currentKeyPath == expectedKeyPath, nil
+			}
+		}
+	}
+
+	return false, nil // No IdentityFile found
+}
+
+// removeSSHConfigHost removes a Host entry from the SSH config
+func removeSSHConfigHost(configPath string, hostname string) error {
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	hostPattern := regexp.MustCompile(`(?i)^\s*Host\s+.*\b` + regexp.QuoteMeta(hostname) + `\b`)
+	casshCommentPattern := regexp.MustCompile(`(?i)^\s*#\s*Added by cassh`)
+
+	var newLines []string
+	skipBlock := false
+	skipComment := false
+
+	for i, line := range lines {
+		// Check if this is a cassh comment right before a Host block
+		if casshCommentPattern.MatchString(line) {
+			// Look ahead to see if next non-empty line is the Host we're removing
+			for j := i + 1; j < len(lines); j++ {
+				nextLine := strings.TrimSpace(lines[j])
+				if nextLine == "" {
+					continue
+				}
+				if hostPattern.MatchString(nextLine) {
+					skipComment = true
+				}
+				break
+			}
+		}
+
+		if skipComment {
+			skipComment = false
+			continue // Skip the cassh comment
+		}
+
+		if hostPattern.MatchString(line) {
+			skipBlock = true
+			continue
+		}
+
+		// Check if we've entered a new Host block or hit an empty line after options
+		if skipBlock {
+			trimmed := strings.TrimSpace(line)
+			// If line starts with Host (new block) or is empty after we've seen some content
+			if regexp.MustCompile(`(?i)^\s*Host\s+`).MatchString(line) {
+				skipBlock = false
+			} else if trimmed != "" && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, " ") && !strings.HasPrefix(trimmed, "\t") {
+				// Non-indented, non-comment, non-empty line means new section
+				skipBlock = false
+			} else {
+				continue // Still in the block we're removing
+			}
+		}
+
+		newLines = append(newLines, line)
+	}
+
+	// Remove trailing empty lines and write back
+	result := strings.TrimRight(strings.Join(newLines, "\n"), "\n") + "\n"
+	return os.WriteFile(configPath, []byte(result), 0600)
+}
+
 // ensureSSHConfigForConnection adds or updates SSH config for a connection
 // Supports both enterprise (certificate) and personal (key-only) connections
 func ensureSSHConfigForConnection(conn *config.Connection) error {
@@ -659,19 +754,7 @@ func ensureSSHConfigForConnection(conn *config.Connection) error {
 		return fmt.Errorf("failed to create .ssh directory: %w", err)
 	}
 
-	// Check if config file exists and if it already has this host
-	if _, err := os.Stat(sshConfigPath); err == nil {
-		hasHost, err := sshConfigHasHost(sshConfigPath, conn.GitHubHost)
-		if err != nil {
-			return fmt.Errorf("failed to check SSH config: %w", err)
-		}
-		if hasHost {
-			log.Printf("SSH config already has entry for %s", conn.GitHubHost)
-			return nil
-		}
-	}
-
-	// Build host entry based on connection type
+	// Build the expected host entry based on connection type
 	var hostEntry string
 	if conn.Type == config.ConnectionTypeEnterprise {
 		// Enterprise: use certificate auth
@@ -698,6 +781,31 @@ Host %s
 `, conn.Name, conn.GitHubHost, conn.GitHubHost, conn.SSHKeyPath)
 	}
 
+	// Check if config file exists and if it already has this host
+	if _, err := os.Stat(sshConfigPath); err == nil {
+		hasHost, err := sshConfigHasHost(sshConfigPath, conn.GitHubHost)
+		if err != nil {
+			return fmt.Errorf("failed to check SSH config: %w", err)
+		}
+		if hasHost {
+			// Check if the key path is correct
+			hasCorrectKey, err := sshConfigHasCorrectKey(sshConfigPath, conn.GitHubHost, conn.SSHKeyPath)
+			if err != nil {
+				return fmt.Errorf("failed to check SSH config key path: %w", err)
+			}
+			if hasCorrectKey {
+				log.Printf("SSH config already has correct entry for %s", conn.GitHubHost)
+				return nil
+			}
+			// Key path is wrong, remove old entry and add new one
+			log.Printf("SSH config has outdated entry for %s, updating...", conn.GitHubHost)
+			if err := removeSSHConfigHost(sshConfigPath, conn.GitHubHost); err != nil {
+				return fmt.Errorf("failed to remove old SSH config entry: %w", err)
+			}
+		}
+	}
+
+	// Append the new host entry
 	f, err := os.OpenFile(sshConfigPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to open SSH config: %w", err)

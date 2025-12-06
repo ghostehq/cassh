@@ -146,15 +146,20 @@ func handleInstallCertURL(u *url.URL) {
 		return
 	}
 
-	// Decode base64
-	certBytes, err := base64.URLEncoding.DecodeString(certB64)
+	// Decode base64 - try RawURLEncoding first (no padding, URL-safe chars)
+	// This matches the JavaScript: btoa().replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+	certBytes, err := base64.RawURLEncoding.DecodeString(certB64)
 	if err != nil {
-		// Try standard base64
-		certBytes, err = base64.StdEncoding.DecodeString(certB64)
+		// Try URL encoding with padding
+		certBytes, err = base64.URLEncoding.DecodeString(certB64)
 		if err != nil {
-			log.Printf("Failed to decode certificate: %v", err)
-			sendNotification("cassh Error", "Failed to decode certificate", false)
-			return
+			// Try standard base64
+			certBytes, err = base64.StdEncoding.DecodeString(certB64)
+			if err != nil {
+				log.Printf("Failed to decode certificate: %v", err)
+				sendNotification("cassh Error", "Failed to decode certificate", false)
+				return
+			}
 		}
 	}
 
@@ -210,8 +215,13 @@ func handleInstallCertURL(u *url.URL) {
 		log.Printf("Warning: ssh-add failed: %v", err)
 	}
 
-	// Ensure SSH config
-	if gheURL != "" && !strings.HasPrefix(gheURL, "https://github.com") {
+	// Ensure SSH config is correct for this connection
+	if conn != nil {
+		if err := ensureSSHConfigForConnection(conn); err != nil {
+			log.Printf("Warning: failed to configure SSH config: %v", err)
+		}
+	} else if gheURL != "" && !strings.HasPrefix(gheURL, "https://github.com") {
+		// Legacy fallback
 		if err := ensureSSHConfig(gheURL, keyPath); err != nil {
 			log.Printf("Warning: failed to configure SSH config: %v", err)
 		}
