@@ -2,13 +2,16 @@
 
 // cassh-menubar is the macOS menu bar application
 // It shows cert status and handles automatic cert installation
+// Supports both GitHub Enterprise (certificate-based) and GitHub.com (key-based) auth
 package main
 
 import (
 	"bufio"
 	"crypto/ed25519"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"net/url"
@@ -17,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/getlantern/systray"
@@ -25,33 +29,63 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+//go:embed templates/*
+var templatesFS embed.FS
+
 const (
-	loopbackPort       = 52849       // cassh loopback listener port
-	expiryWarningTime  = time.Hour   // Warn when cert expires within this duration
+	loopbackPort      = 52849     // cassh loopback listener port
+	expiryWarningTime = time.Hour // Warn when cert expires within this duration
+)
+
+// Build variables set by ldflags
+var (
+	version   = "dev"
+	buildTime = ""
 )
 
 var (
-	cfg          *config.MergedConfig
-	certStatus   *CertStatus
-	menuStatus   *systray.MenuItem
-	menuGenerate *systray.MenuItem
-	menuQuit     *systray.MenuItem
+	cfg        *config.MergedConfig
+	needsSetup bool
+	templates  *template.Template
+
+	// Menu items
+	menuStatus      *systray.MenuItem
+	menuConnections []*systray.MenuItem // Dynamic list of connection menu items
+	menuAddConn     *systray.MenuItem
+	menuQuit        *systray.MenuItem
+
+	// Connection status tracking (keyed by connection ID)
+	connectionStatus map[string]*ConnectionStatus
 )
 
-// CertStatus tracks the current cert state
-type CertStatus struct {
+// ConnectionStatus tracks the status of a single connection
+type ConnectionStatus struct {
+	ConnectionID       string
 	Valid              bool
 	TimeLeft           time.Duration
 	ValidBefore        time.Time
 	LastCheck          time.Time
-	NotifiedActivation bool  // Track if we've notified about activation
-	NotifiedExpiring   bool  // Track if we've notified about expiring soon
-	NotifiedExpired    bool  // Track if we've notified about expiration
+	NotifiedActivation bool
+	NotifiedExpiring   bool
+	NotifiedExpired    bool
 }
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	log.Println("Starting cassh-menubar...")
+
+	// Initialize native notifications (request permission)
+	initNotifications()
+
+	// Ensure app starts on login (install LaunchAgent if not present)
+	installLaunchAgent()
+
+	// Load templates for setup wizard
+	var err error
+	templates, err = template.ParseFS(templatesFS, "templates/*.html")
+	if err != nil {
+		log.Printf("Warning: Could not load templates: %v", err)
+	}
 
 	// Load config
 	// Try devel policy first, then default policy path
@@ -64,7 +98,6 @@ func main() {
 	if err != nil {
 		log.Printf("Warning: Could not load policy, using defaults: %v", err)
 		policy = &config.PolicyConfig{
-			ServerBaseURL:     "http://localhost:8080",
 			CertValidityHours: 12,
 		}
 	}
@@ -77,13 +110,37 @@ func main() {
 	}
 
 	cfg = config.MergeConfigs(policy, userCfg)
-	certStatus = &CertStatus{}
+	connectionStatus = make(map[string]*ConnectionStatus)
 
-	// Start loopback listener for auto-install
+	// Check if setup is needed (OSS mode with no connections configured)
+	needsSetup = config.NeedsSetup(&cfg.Policy, &cfg.User)
+
+	// If enterprise mode and no connections in user config, create one from policy
+	if config.IsEnterpriseMode(&cfg.Policy) && !cfg.User.HasConnections() {
+		if conn := config.CreateEnterpriseConnectionFromPolicy(&cfg.Policy); conn != nil {
+			cfg.User.AddConnection(*conn)
+			// Save the connection
+			if err := config.SaveUserConfig(&cfg.User); err != nil {
+				log.Printf("Warning: Could not save user config: %v", err)
+			}
+		}
+	}
+
+	// Initialize connection status for all connections
+	for _, conn := range cfg.User.Connections {
+		connectionStatus[conn.ID] = &ConnectionStatus{ConnectionID: conn.ID}
+	}
+
+	// Check for keys that need rotation on startup
+	go checkAndRotateExpiredKeys()
+
+	// Start loopback listener for auto-install and setup wizard
 	go startLoopbackListener()
 
-	// Start cert monitor
-	go monitorCertificate()
+	// Start connection monitors (if we have connections)
+	if !needsSetup {
+		go monitorConnections()
+	}
 
 	// Run systray
 	systray.Run(onReady, onExit)
@@ -93,136 +150,141 @@ func onReady() {
 	systray.SetTemplateIcon(terminalIcon, terminalIcon)
 	systray.SetTooltip("cassh - SSH Certificate Manager")
 
-	menuStatus = systray.AddMenuItem("Status: Checking...", "Current certificate status")
-	menuStatus.Disable()
+	if needsSetup {
+		// Setup mode - show setup wizard prompt
+		menuStatus = systray.AddMenuItem("Setup Required", "Click to configure cassh")
+		menuStatus.Disable()
+
+		systray.AddSeparator()
+
+		menuAddConn = systray.AddMenuItem("Open Setup Wizard...", "Configure cassh for GitHub")
+
+		systray.AddSeparator()
+
+		menuAbout := systray.AddMenuItem("About cassh", "About this application")
+		menuUninstall := systray.AddMenuItem("Uninstall cassh...", "Remove cassh from your system")
+		menuQuit = systray.AddMenuItem("Quit", "Quit cassh")
+
+		// Handle menu clicks
+		go func() {
+			for {
+				select {
+				case <-menuAddConn.ClickedCh:
+					openSetupWizard()
+				case <-menuAbout.ClickedCh:
+					showAbout()
+				case <-menuUninstall.ClickedCh:
+					uninstallCassh()
+				case <-menuQuit.ClickedCh:
+					systray.Quit()
+				}
+			}
+		}()
+
+		// Auto-open setup wizard on first launch
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			openSetupWizard()
+		}()
+	} else {
+		// Normal mode - show connections and their status
+		buildConnectionMenu()
+	}
+}
+
+// buildConnectionMenu creates menu items for all configured connections
+func buildConnectionMenu() {
+	// Add connection status items
+	for i, conn := range cfg.User.Connections {
+		statusText := fmt.Sprintf("%s: Checking...", conn.Name)
+		menuItem := systray.AddMenuItem(statusText, fmt.Sprintf("Status for %s", conn.Name))
+		menuItem.Disable()
+		menuConnections = append(menuConnections, menuItem)
+
+		// Add action item for this connection
+		actionText := "Generate / Renew"
+		if conn.Type == config.ConnectionTypePersonal {
+			actionText = "Refresh Key"
+		}
+		actionItem := systray.AddMenuItem(fmt.Sprintf("  %s", actionText), fmt.Sprintf("Generate/renew for %s", conn.Name))
+
+		// Capture connection for closure
+		connID := conn.ID
+		connIdx := i
+		go func() {
+			for range actionItem.ClickedCh {
+				handleConnectionAction(connID)
+			}
+		}()
+
+		// Update status for this connection
+		go updateConnectionStatus(connIdx)
+
+		if i < len(cfg.User.Connections)-1 {
+			systray.AddSeparator()
+		}
+	}
 
 	systray.AddSeparator()
 
-	menuGenerate = systray.AddMenuItem("Generate / Renew Cert", "Open browser to generate new certificate")
+	menuAddConn = systray.AddMenuItem("+ Add Connection...", "Add another GitHub connection")
 
 	systray.AddSeparator()
 
 	menuAbout := systray.AddMenuItem("About cassh", "About this application")
+	menuUninstall := systray.AddMenuItem("Uninstall cassh...", "Remove cassh from your system")
 	menuQuit = systray.AddMenuItem("Quit", "Quit cassh")
 
 	// Handle menu clicks
 	go func() {
 		for {
 			select {
-			case <-menuGenerate.ClickedCh:
-				generateCert()
+			case <-menuAddConn.ClickedCh:
+				openSetupWizard()
 			case <-menuAbout.ClickedCh:
 				showAbout()
+			case <-menuUninstall.ClickedCh:
+				uninstallCassh()
 			case <-menuQuit.ClickedCh:
 				systray.Quit()
 			}
 		}
 	}()
-
-	// Initial status check
-	updateCertStatus()
 }
 
-func onExit() {
-	log.Println("cassh-menubar exiting...")
+// openSetupWizard opens the setup wizard in the browser
+func openSetupWizard() {
+	setupURL := fmt.Sprintf("http://localhost:%d/setup", loopbackPort)
+	if err := openBrowser(setupURL); err != nil {
+		log.Printf("Error opening setup wizard: %v", err)
+	}
 }
 
-// updateCertStatus checks the current cert and updates the menu bar
-func updateCertStatus() {
-	certPath := cfg.User.SSHCertPath
-	certStatus.LastCheck = time.Now()
-
-	// Check if cert file exists
-	certData, err := os.ReadFile(certPath)
-	if err != nil {
-		setStatusInvalid("No certificate found", false)
+// handleConnectionAction handles the action for a specific connection
+func handleConnectionAction(connID string) {
+	conn := cfg.User.GetConnection(connID)
+	if conn == nil {
+		log.Printf("Connection not found: %s", connID)
 		return
 	}
 
-	// Parse cert
-	cert, err := ca.ParseCertificate(certData)
-	if err != nil {
-		setStatusInvalid("Invalid certificate", false)
-		return
-	}
-
-	// Check validity
-	info := ca.GetCertInfo(cert)
-	if info.IsExpired {
-		setStatusInvalid("Certificate expired", true)
-		return
-	}
-
-	// Cert is valid - reset expired notification flag
-	certStatus.NotifiedExpired = false
-
-	// Check if expiring soon (within warning time)
-	if info.TimeLeft <= expiryWarningTime {
-		if !certStatus.NotifiedExpiring {
-			mins := int(info.TimeLeft.Minutes())
-			sendNotification("cassh Certificate Expiring",
-				fmt.Sprintf("Your SSH certificate expires in %d minutes. Click the menu bar icon to renew.", mins),
-				true)
-			certStatus.NotifiedExpiring = true
-		}
+	if conn.Type == config.ConnectionTypeEnterprise {
+		generateCertForConnection(conn)
 	} else {
-		// Reset expiring notification if we're no longer in the warning window
-		certStatus.NotifiedExpiring = false
-	}
-
-	// Cert is valid
-	certStatus.Valid = true
-	certStatus.TimeLeft = info.TimeLeft
-	certStatus.ValidBefore = info.ValidBefore
-
-	hours := int(info.TimeLeft.Hours())
-	mins := int(info.TimeLeft.Minutes()) % 60
-
-	var statusText string
-	if hours > 0 {
-		statusText = fmt.Sprintf("🟢 Valid (%dh %dm left)", hours, mins)
-	} else {
-		statusText = fmt.Sprintf("🟡 Valid (%dm left)", mins)
-	}
-
-	menuStatus.SetTitle(statusText)
-	setIconGreen()
-}
-
-func setStatusInvalid(reason string, isExpired bool) {
-	certStatus.Valid = false
-	certStatus.TimeLeft = 0
-	menuStatus.SetTitle(fmt.Sprintf("🔴 %s", reason))
-	setIconRed()
-
-	// Send expired notification only once
-	if isExpired && !certStatus.NotifiedExpired {
-		sendNotification("cassh Certificate Expired",
-			"Your SSH certificate has expired. Click the menu bar icon to generate a new one.",
-			true)
-		certStatus.NotifiedExpired = true
+		refreshKeyForConnection(conn)
 	}
 }
 
-func setIconGreen() {
-	systray.SetTemplateIcon(terminalIcon, terminalIcon)
-}
-
-func setIconRed() {
-	systray.SetTemplateIcon(terminalIcon, terminalIcon)
-}
-
-// generateCert opens browser to generate a new cert
-func generateCert() {
+// generateCertForConnection opens browser to generate cert for enterprise connection
+func generateCertForConnection(conn *config.Connection) {
 	// Ensure SSH key exists
-	keyPath := cfg.User.SSHKeyPath
-	if err := ensureSSHKey(keyPath); err != nil {
+	if err := ensureSSHKey(conn.SSHKeyPath); err != nil {
 		log.Printf("Error ensuring SSH key: %v", err)
 		return
 	}
 
 	// Read public key
-	pubKeyPath := keyPath + ".pub"
+	pubKeyPath := conn.SSHKeyPath + ".pub"
 	pubKeyData, err := os.ReadFile(pubKeyPath)
 	if err != nil {
 		log.Printf("Error reading public key: %v", err)
@@ -231,7 +293,7 @@ func generateCert() {
 
 	// Build URL
 	authURL := fmt.Sprintf("%s/?pubkey=%s",
-		cfg.Policy.ServerBaseURL,
+		conn.ServerURL,
 		url.QueryEscape(string(pubKeyData)),
 	)
 
@@ -240,6 +302,142 @@ func generateCert() {
 		log.Printf("Error opening browser: %v", err)
 	}
 }
+
+// refreshKeyForConnection handles key refresh for personal GitHub connection
+func refreshKeyForConnection(conn *config.Connection) {
+	// Check if gh CLI is authenticated
+	ghStatus := checkGHAuth()
+	if !ghStatus.Installed {
+		sendNotification("cassh", "GitHub CLI (gh) is not installed", false)
+		return
+	}
+	if !ghStatus.Authenticated {
+		sendNotification("cassh", "Please run 'gh auth login' first", false)
+		return
+	}
+
+	// Rotate the key (delete old, generate new, upload new)
+	if err := rotatePersonalGitHubSSH(conn); err != nil {
+		log.Printf("Failed to rotate key: %v", err)
+		sendNotification("cassh", fmt.Sprintf("Failed to rotate key: %v", err), false)
+		return
+	}
+
+	// Save updated connection config with new key ID and timestamp
+	if err := config.SaveUserConfig(&cfg.User); err != nil {
+		log.Printf("Failed to save config after key rotation: %v", err)
+	}
+
+	sendNotification("cassh", fmt.Sprintf("SSH key rotated for %s", conn.Name), false)
+	log.Printf("Rotated SSH key for: %s", conn.Name)
+}
+
+// updateConnectionStatus checks and updates the status for a specific connection
+func updateConnectionStatus(connIdx int) {
+	if connIdx >= len(cfg.User.Connections) {
+		return
+	}
+
+	conn := cfg.User.Connections[connIdx]
+	status := connectionStatus[conn.ID]
+	if status == nil {
+		status = &ConnectionStatus{ConnectionID: conn.ID}
+		connectionStatus[conn.ID] = status
+	}
+
+	status.LastCheck = time.Now()
+
+	if conn.Type == config.ConnectionTypeEnterprise {
+		// Check certificate status
+		certData, err := os.ReadFile(conn.SSHCertPath)
+		if err != nil {
+			setConnectionStatusInvalid(connIdx, "No certificate", false)
+			return
+		}
+
+		cert, err := ca.ParseCertificate(certData)
+		if err != nil {
+			setConnectionStatusInvalid(connIdx, "Invalid certificate", false)
+			return
+		}
+
+		info := ca.GetCertInfo(cert)
+		if info.IsExpired {
+			setConnectionStatusInvalid(connIdx, "Certificate expired", true)
+			return
+		}
+
+		// Certificate is valid
+		status.Valid = true
+		status.TimeLeft = info.TimeLeft
+		status.ValidBefore = info.ValidBefore
+
+		hours := int(info.TimeLeft.Hours())
+		mins := int(info.TimeLeft.Minutes()) % 60
+
+		var statusText string
+		if hours > 0 {
+			statusText = fmt.Sprintf("🟢 %s (%dh %dm)", conn.Name, hours, mins)
+		} else {
+			statusText = fmt.Sprintf("🟡 %s (%dm)", conn.Name, mins)
+		}
+
+		if connIdx < len(menuConnections) {
+			menuConnections[connIdx].SetTitle(statusText)
+		}
+	} else {
+		// Personal connection - check if key exists
+		if _, err := os.Stat(conn.SSHKeyPath); err != nil {
+			setConnectionStatusInvalid(connIdx, "No key configured", false)
+			return
+		}
+
+		// Key exists - show as active
+		status.Valid = true
+		statusText := fmt.Sprintf("🟢 %s (@%s)", conn.Name, conn.GitHubUsername)
+		if connIdx < len(menuConnections) {
+			menuConnections[connIdx].SetTitle(statusText)
+		}
+	}
+}
+
+// setConnectionStatusInvalid marks a connection as invalid in the menu
+func setConnectionStatusInvalid(connIdx int, reason string, isExpired bool) {
+	if connIdx >= len(cfg.User.Connections) || connIdx >= len(menuConnections) {
+		return
+	}
+
+	conn := cfg.User.Connections[connIdx]
+	status := connectionStatus[conn.ID]
+	if status != nil {
+		status.Valid = false
+		status.TimeLeft = 0
+	}
+
+	menuConnections[connIdx].SetTitle(fmt.Sprintf("🔴 %s - %s", conn.Name, reason))
+}
+
+// monitorConnections periodically checks all connection statuses
+func monitorConnections() {
+	interval := time.Duration(cfg.User.RefreshIntervalSeconds) * time.Second
+	if interval == 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		for i := range cfg.User.Connections {
+			updateConnectionStatus(i)
+		}
+	}
+}
+
+func onExit() {
+	log.Println("cassh-menubar exiting...")
+}
+
+// Legacy function removed - now using updateConnectionStatus and connection-based model
 
 // ensureSSHKey creates the SSH key if it doesn't exist
 func ensureSSHKey(keyPath string) error {
@@ -329,6 +527,7 @@ func ensureSSHConfig(gheURL string, keyPath string) error {
 	}
 
 	// Append the host entry
+	// IdentityAgent none bypasses 1Password and other SSH agent managers
 	hostEntry := fmt.Sprintf(`
 # Added by cassh for GitHub Enterprise SSH certificate auth
 Host %s
@@ -336,6 +535,7 @@ Host %s
     User git
     IdentityFile %s
     IdentitiesOnly yes
+    IdentityAgent none
 `, gheHost, gheHost, keyPath)
 
 	f, err := os.OpenFile(sshConfigPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
@@ -374,6 +574,79 @@ func sshConfigHasHost(configPath string, hostname string) (bool, error) {
 	return false, scanner.Err()
 }
 
+// ensureSSHConfigForConnection adds or updates SSH config for a connection
+// Supports both enterprise (certificate) and personal (key-only) connections
+func ensureSSHConfigForConnection(conn *config.Connection) error {
+	if conn.GitHubHost == "" {
+		return nil // No host configured
+	}
+
+	// SSH config path
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home dir: %w", err)
+	}
+	sshConfigPath := filepath.Join(homeDir, ".ssh", "config")
+
+	// Ensure .ssh directory exists
+	sshDir := filepath.Dir(sshConfigPath)
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		return fmt.Errorf("failed to create .ssh directory: %w", err)
+	}
+
+	// Check if config file exists and if it already has this host
+	if _, err := os.Stat(sshConfigPath); err == nil {
+		hasHost, err := sshConfigHasHost(sshConfigPath, conn.GitHubHost)
+		if err != nil {
+			return fmt.Errorf("failed to check SSH config: %w", err)
+		}
+		if hasHost {
+			log.Printf("SSH config already has entry for %s", conn.GitHubHost)
+			return nil
+		}
+	}
+
+	// Build host entry based on connection type
+	var hostEntry string
+	if conn.Type == config.ConnectionTypeEnterprise {
+		// Enterprise: use certificate auth
+		hostEntry = fmt.Sprintf(`
+# Added by cassh for %s (enterprise certificate auth)
+Host %s
+    HostName %s
+    User git
+    IdentityFile %s
+    CertificateFile %s
+    IdentitiesOnly yes
+    IdentityAgent none
+`, conn.Name, conn.GitHubHost, conn.GitHubHost, conn.SSHKeyPath, conn.SSHCertPath)
+	} else {
+		// Personal: use key-only auth
+		hostEntry = fmt.Sprintf(`
+# Added by cassh for %s (personal key auth)
+Host %s
+    HostName %s
+    User git
+    IdentityFile %s
+    IdentitiesOnly yes
+    IdentityAgent none
+`, conn.Name, conn.GitHubHost, conn.GitHubHost, conn.SSHKeyPath)
+	}
+
+	f, err := os.OpenFile(sshConfigPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to open SSH config: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(hostEntry); err != nil {
+		return fmt.Errorf("failed to write SSH config: %w", err)
+	}
+
+	log.Printf("Added SSH config entry for %s (%s)", conn.GitHubHost, conn.Type)
+	return nil
+}
+
 func openBrowser(urlStr string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -387,42 +660,165 @@ func openBrowser(urlStr string) error {
 	return cmd.Start()
 }
 
-// sendNotification sends a macOS notification
+// sendNotification sends a macOS notification with the app's icon
 // If actionOnClick is true and the notification is clicked, it will trigger cert generation
 func sendNotification(title, message string, actionOnClick bool) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
 
-	// Use osascript to send notification
-	script := fmt.Sprintf(`display notification %q with title %q`, message, title)
-	cmd := exec.Command("osascript", "-e", script)
+	// Use native UserNotifications framework for proper app icon
+	sendNativeNotification(title, message)
+
+	// TODO: Click actions require implementing UNUserNotificationCenterDelegate
+	// For now, the user can click the menu bar icon to regenerate
+}
+
+
+// uninstallCassh removes cassh and all its data from the system
+func uninstallCassh() {
+	// Show confirmation dialog
+	if !showUninstallConfirmation() {
+		return
+	}
+
+	homeDir, _ := os.UserHomeDir()
+
+	// 1. Delete SSH keys created by cassh for each connection
+	for _, conn := range cfg.User.Connections {
+		// Delete from GitHub if personal account
+		if conn.Type == config.ConnectionTypePersonal && conn.GitHubKeyID != "" {
+			if err := deleteSSHKeyFromGitHub(conn.GitHubKeyID); err != nil {
+				log.Printf("Warning: Could not delete GitHub key: %v", err)
+			}
+		}
+
+		// Delete local key files
+		if conn.SSHKeyPath != "" {
+			os.Remove(conn.SSHKeyPath)
+			os.Remove(conn.SSHKeyPath + ".pub")
+		}
+		if conn.SSHCertPath != "" {
+			os.Remove(conn.SSHCertPath)
+		}
+	}
+
+	// 2. Remove LaunchAgent
+	launchAgentPath := filepath.Join(homeDir, "Library", "LaunchAgents", "com.shawnschwartz.cassh.plist")
+	exec.Command("launchctl", "unload", launchAgentPath).Run()
+	os.Remove(launchAgentPath)
+
+	// 3. Remove Application Support directory
+	appSupportDir := filepath.Join(homeDir, "Library", "Application Support", "cassh")
+	os.RemoveAll(appSupportDir)
+
+	// 4. Remove preferences
+	prefsPath := filepath.Join(homeDir, "Library", "Preferences", "com.shawnschwartz.cassh.plist")
+	os.Remove(prefsPath)
+
+	// 5. Get current app path and create uninstall script
+	execPath, _ := os.Executable()
+	appPath := execPath
+	// If running from .app bundle, get the .app path
+	if idx := strings.Index(execPath, ".app/"); idx != -1 {
+		appPath = execPath[:idx+4]
+	}
+
+	// Create script to delete the app after we quit
+	// (Can't delete ourselves while running)
+	uninstallScript := fmt.Sprintf(`#!/bin/bash
+sleep 1
+rm -rf "%s"
+osascript -e 'display notification "cassh has been uninstalled" with title "Uninstall Complete"'
+`, appPath)
+
+	scriptPath := filepath.Join(os.TempDir(), "cassh_uninstall.sh")
+	os.WriteFile(scriptPath, []byte(uninstallScript), 0755)
+
+	// Run the uninstall script in background
+	exec.Command("bash", scriptPath).Start()
+
+	// Quit the app
+	log.Println("Uninstalling cassh...")
+	systray.Quit()
+}
+
+// installLaunchAgent installs a LaunchAgent to start cassh on login
+func installLaunchAgent() {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("Warning: Could not get home directory: %v", err)
+		return
+	}
+
+	launchAgentDir := filepath.Join(homeDir, "Library", "LaunchAgents")
+	launchAgentPath := filepath.Join(launchAgentDir, "com.shawnschwartz.cassh.plist")
+
+	// Check if already installed
+	if _, err := os.Stat(launchAgentPath); err == nil {
+		return // Already installed
+	}
+
+	// Create LaunchAgents directory if needed
+	if err := os.MkdirAll(launchAgentDir, 0755); err != nil {
+		log.Printf("Warning: Could not create LaunchAgents directory: %v", err)
+		return
+	}
+
+	// Get the path to the current executable
+	execPath, err := os.Executable()
+	if err != nil {
+		log.Printf("Warning: Could not get executable path: %v", err)
+		return
+	}
+
+	// Create LaunchAgent plist
+	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.shawnschwartz.cassh</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>%s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
+`, execPath)
+
+	if err := os.WriteFile(launchAgentPath, []byte(plist), 0644); err != nil {
+		log.Printf("Warning: Could not write LaunchAgent: %v", err)
+		return
+	}
+
+	// Load the LaunchAgent
+	cmd := exec.Command("launchctl", "load", launchAgentPath)
 	if err := cmd.Run(); err != nil {
-		log.Printf("Failed to send notification: %v", err)
+		log.Printf("Warning: Could not load LaunchAgent: %v", err)
 	}
 
-	// Note: macOS notifications don't support click actions via osascript
-	// The user can click the menu bar icon to regenerate
+	log.Println("Installed LaunchAgent for auto-start on login")
 }
 
-func showAbout() {
-	_ = openBrowser("https://shawnschwartz.com/cassh")
-}
+// Legacy monitorCertificate removed - now using monitorConnections
 
-// monitorCertificate periodically checks cert status
-func monitorCertificate() {
-	interval := time.Duration(cfg.User.RefreshIntervalSeconds) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		updateCertStatus()
-	}
-}
-
-// startLoopbackListener starts the local HTTP server for auto-install
+// startLoopbackListener starts the local HTTP server for auto-install and setup wizard
 func startLoopbackListener() {
 	mux := http.NewServeMux()
+
+	// Setup wizard endpoints
+	mux.HandleFunc("/setup", handleSetup)
+	mux.HandleFunc("/setup/add-enterprise", handleAddEnterprise)
+	mux.HandleFunc("/setup/add-personal", handleAddPersonal)
+	mux.HandleFunc("/setup/delete-connection", handleDeleteConnection)
+	mux.HandleFunc("/setup/gh-status", handleGHStatus)
+
+	// Certificate/key management endpoints
 	mux.HandleFunc("/install-cert", handleInstallCert)
 	mux.HandleFunc("/status", handleStatus)
 
@@ -441,7 +837,7 @@ func startLoopbackListener() {
 	}
 }
 
-// handleInstallCert receives the cert from browser
+// handleInstallCert receives the cert from browser (for enterprise connections)
 func handleInstallCert(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -449,7 +845,8 @@ func handleInstallCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Cert string `json:"cert"`
+		Cert         string `json:"cert"`
+		ConnectionID string `json:"connection_id,omitempty"` // Optional: specific connection
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -463,8 +860,35 @@ func handleInstallCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Find the connection to install cert for
+	var conn *config.Connection
+	if req.ConnectionID != "" {
+		conn = cfg.User.GetConnection(req.ConnectionID)
+	} else if len(cfg.User.Connections) > 0 {
+		// Default to first enterprise connection
+		for i := range cfg.User.Connections {
+			if cfg.User.Connections[i].Type == config.ConnectionTypeEnterprise {
+				conn = &cfg.User.Connections[i]
+				break
+			}
+		}
+	}
+
+	// Fallback to legacy paths if no connection found
+	var certPath, keyPath string
+	var gheURL string
+	if conn != nil {
+		certPath = conn.SSHCertPath
+		keyPath = conn.SSHKeyPath
+		gheURL = "https://" + conn.GitHubHost
+	} else {
+		// Legacy fallback
+		certPath = cfg.User.SSHCertPath
+		keyPath = cfg.User.SSHKeyPath
+		gheURL = cfg.Policy.GitHubEnterpriseURL
+	}
+
 	// Write cert
-	certPath := cfg.User.SSHCertPath
 	if err := os.WriteFile(certPath, []byte(req.Cert), 0644); err != nil {
 		log.Printf("Failed to write cert: %v", err)
 		http.Error(w, "Failed to save certificate", http.StatusInternalServerError)
@@ -472,43 +896,775 @@ func handleInstallCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add to ssh-agent
-	keyPath := cfg.User.SSHKeyPath
 	if err := exec.Command("ssh-add", keyPath).Run(); err != nil {
 		log.Printf("Warning: ssh-add failed: %v", err)
 	}
 
 	// Ensure SSH config has the correct Host entry for GHE
-	if err := ensureSSHConfig(cfg.Policy.GitHubEnterpriseURL, keyPath); err != nil {
+	log.Printf("GitHubEnterpriseURL: %q", gheURL)
+	if err := ensureSSHConfig(gheURL, keyPath); err != nil {
 		log.Printf("Warning: failed to configure SSH config: %v", err)
 	}
 
 	log.Println("Certificate installed successfully")
 
 	// Send activation notification
+	connName := "GitHub Enterprise"
+	if conn != nil {
+		connName = conn.Name
+	}
 	sendNotification("cassh Certificate Activated",
-		"Your SSH certificate is now active and ready to use.",
+		fmt.Sprintf("Your SSH certificate for %s is now active.", connName),
 		false)
 
-	// Reset notification flags for new cert
-	certStatus.NotifiedExpiring = false
-	certStatus.NotifiedExpired = false
-
-	// Update status immediately
-	go updateCertStatus()
+	// Update connection status
+	if conn != nil {
+		for i, c := range cfg.User.Connections {
+			if c.ID == conn.ID {
+				go updateConnectionStatus(i)
+				break
+			}
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// handleStatus returns current cert status
+// handleStatus returns current status for all connections
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
+	statuses := make([]map[string]interface{}, 0)
+	for _, conn := range cfg.User.Connections {
+		status := connectionStatus[conn.ID]
+
+		// Determine github_host based on connection type
+		githubHost := conn.GitHubHost
+		if githubHost == "" {
+			if conn.Type == "personal" {
+				githubHost = "github.com"
+			} else if conn.ServerURL != "" {
+				githubHost = config.ExtractHostFromURL(conn.ServerURL)
+			}
+		}
+
+		s := map[string]interface{}{
+			"id":          conn.ID,
+			"name":        conn.Name,
+			"type":        conn.Type,
+			"github_host": githubHost,
+			"is_valid":    false,
+			"time_left":   "",
+		}
+		if status != nil {
+			s["is_valid"] = status.Valid
+			s["time_left"] = status.TimeLeft.String()
+			s["expires_at"] = status.ValidBefore
+			s["last_check"] = status.LastCheck
+		}
+		statuses = append(statuses, s)
+	}
+
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"valid":      certStatus.Valid,
-		"time_left":  certStatus.TimeLeft.String(),
-		"expires_at": certStatus.ValidBefore,
-		"last_check": certStatus.LastCheck,
+		"connections": statuses,
+		"needs_setup": needsSetup,
 	})
+}
+
+// handleSetup serves the setup wizard page
+func handleSetup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	data := struct {
+		HasConnections bool
+		Connections    []config.Connection
+	}{
+		HasConnections: cfg.User.HasConnections(),
+		Connections:    cfg.User.Connections,
+	}
+
+	if templates != nil {
+		if err := templates.ExecuteTemplate(w, "setup.html", data); err != nil {
+			log.Printf("Template error: %v", err)
+			// Fallback to basic HTML
+			fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>cassh Setup</title></head><body>
+				<h1>cassh Setup</h1>
+				<p>Template error: %v</p>
+				<p><a href="/setup/add-enterprise">Add GitHub Enterprise</a></p>
+				<p><a href="/setup/add-personal">Add GitHub.com Personal</a></p>
+			</body></html>`, err)
+		}
+	} else {
+		// Basic HTML fallback
+		fmt.Fprint(w, `<!DOCTYPE html><html><head><title>cassh Setup</title></head><body>
+			<h1>cassh Setup</h1>
+			<p><a href="/setup/add-enterprise">Add GitHub Enterprise</a></p>
+			<p><a href="/setup/add-personal">Add GitHub.com Personal</a></p>
+		</body></html>`)
+	}
+}
+
+// handleAddEnterprise handles adding a GitHub Enterprise connection
+func handleAddEnterprise(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		// Show form
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if templates != nil {
+			if err := templates.ExecuteTemplate(w, "add-enterprise.html", nil); err != nil {
+				log.Printf("Template error: %v", err)
+				serveEnterpriseFormFallback(w)
+			}
+		} else {
+			serveEnterpriseFormFallback(w)
+		}
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		// Parse JSON request
+		var req struct {
+			Name       string `json:"name"`
+			ServerURL  string `json:"server_url"`
+			GitHubHost string `json:"github_host"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON: " + err.Error()})
+			return
+		}
+
+		if req.Name == "" {
+			req.Name = "GitHub Enterprise"
+		}
+
+		if req.ServerURL == "" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "Server URL is required"})
+			return
+		}
+
+		if req.GitHubHost == "" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "GitHub Enterprise URL is required"})
+			return
+		}
+
+		// Create connection
+		homeDir, _ := os.UserHomeDir()
+		connID := fmt.Sprintf("enterprise-%d", time.Now().Unix())
+
+		conn := config.Connection{
+			ID:          connID,
+			Type:        config.ConnectionTypeEnterprise,
+			Name:        req.Name,
+			ServerURL:   req.ServerURL,
+			GitHubHost:  config.ExtractHostFromURL(req.GitHubHost),
+			SSHKeyPath:  filepath.Join(homeDir, ".ssh", fmt.Sprintf("cassh_%s_id_ed25519", connID)),
+			SSHCertPath: filepath.Join(homeDir, ".ssh", fmt.Sprintf("cassh_%s_id_ed25519-cert.pub", connID)),
+		}
+
+		// Add connection to config
+		cfg.User.AddConnection(conn)
+		if err := config.SaveUserConfig(&cfg.User); err != nil {
+			log.Printf("Failed to save config: %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "Failed to save configuration"})
+			return
+		}
+
+		// Initialize status tracking
+		connectionStatus[conn.ID] = &ConnectionStatus{ConnectionID: conn.ID}
+
+		// Update needs setup flag
+		needsSetup = false
+
+		// Ensure SSH config is set up for this connection
+		if err := ensureSSHConfigForConnection(&conn); err != nil {
+			log.Printf("Warning: failed to update SSH config: %v", err)
+		}
+
+		log.Printf("Added enterprise connection: %s (%s -> %s)", conn.Name, conn.ServerURL, conn.GitHubHost)
+
+		// Return success
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":    true,
+			"connection": conn,
+		})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+func serveEnterpriseFormFallback(w http.ResponseWriter) {
+	fmt.Fprint(w, `<!DOCTYPE html><html><head><title>Add GitHub Enterprise</title></head><body>
+		<h1>Add GitHub Enterprise Connection</h1>
+		<form method="POST">
+			<p><label>Connection Name: <input type="text" name="name" placeholder="GitHub Enterprise"></label></p>
+			<p><label>Server URL: <input type="url" name="server_url" placeholder="https://cassh.yourcompany.com" required></label></p>
+			<p><button type="submit">Add Connection</button></p>
+		</form>
+	</body></html>`)
+}
+
+// handleAddPersonal handles adding a GitHub.com personal connection
+func handleAddPersonal(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		// Check if gh CLI is installed
+		ghInstalled := false
+		if _, err := exec.LookPath("gh"); err == nil {
+			ghInstalled = true
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if templates != nil {
+			data := struct{ GHInstalled bool }{GHInstalled: ghInstalled}
+			if err := templates.ExecuteTemplate(w, "add-personal.html", data); err != nil {
+				log.Printf("Template error: %v", err)
+				servePersonalFormFallback(w, ghInstalled)
+			}
+		} else {
+			servePersonalFormFallback(w, ghInstalled)
+		}
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		// Parse JSON request
+		var req struct {
+			Name             string `json:"name"`
+			GitHubUsername   string `json:"github_username"`
+			KeyRotationHours int    `json:"key_rotation_hours"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON: " + err.Error()})
+			return
+		}
+
+		if req.Name == "" {
+			req.Name = "GitHub.com"
+		}
+
+		// Default to 12 hours if not specified
+		if req.KeyRotationHours == 0 {
+			req.KeyRotationHours = 12
+		}
+
+		if req.GitHubUsername == "" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "GitHub username is required"})
+			return
+		}
+
+		// Check gh CLI status
+		ghStatus := checkGHAuth()
+		if !ghStatus.Installed {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "GitHub CLI (gh) is not installed. Please install it: brew install gh",
+			})
+			return
+		}
+
+		if !ghStatus.Authenticated {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "Please authenticate with GitHub CLI first: gh auth login",
+			})
+			return
+		}
+
+		// Create connection
+		homeDir, _ := os.UserHomeDir()
+		connID := fmt.Sprintf("personal-%d", time.Now().Unix())
+
+		conn := config.Connection{
+			ID:               connID,
+			Type:             config.ConnectionTypePersonal,
+			Name:             req.Name,
+			GitHubHost:       "github.com",
+			GitHubUsername:   req.GitHubUsername,
+			SSHKeyPath:       filepath.Join(homeDir, ".ssh", fmt.Sprintf("cassh_%s_id_ed25519", connID)),
+			KeyRotationHours: req.KeyRotationHours,
+			// No cert path for personal accounts (key-based auth)
+		}
+
+		// Generate SSH key and upload to GitHub
+		if err := setupPersonalGitHubSSH(&conn); err != nil {
+			log.Printf("Failed to setup SSH key: %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "Failed to setup SSH key: " + err.Error()})
+			return
+		}
+
+		// Add connection to config
+		cfg.User.AddConnection(conn)
+		if err := config.SaveUserConfig(&cfg.User); err != nil {
+			log.Printf("Failed to save config: %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "Failed to save configuration"})
+			return
+		}
+
+		// Initialize status tracking
+		connectionStatus[conn.ID] = &ConnectionStatus{ConnectionID: conn.ID, Valid: true}
+
+		// Update needs setup flag
+		needsSetup = false
+
+		// Ensure SSH config is set up for this connection
+		if err := ensureSSHConfigForConnection(&conn); err != nil {
+			log.Printf("Warning: failed to update SSH config: %v", err)
+		}
+
+		log.Printf("Added personal connection: %s (@%s)", conn.Name, conn.GitHubUsername)
+
+		// Return success
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":    true,
+			"connection": conn,
+			"message":    "SSH key generated and uploaded to GitHub!",
+		})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleDeleteConnection removes a connection from the configuration
+func handleDeleteConnection(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost || r.Method == http.MethodDelete {
+		var req struct {
+			ID string `json:"id"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
+			return
+		}
+
+		if req.ID == "" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "Connection ID is required"})
+			return
+		}
+
+		// Find and remove the connection
+		var removedConn *config.Connection
+		newConnections := make([]config.Connection, 0)
+		for _, conn := range cfg.User.Connections {
+			if conn.ID == req.ID {
+				removedConn = &conn
+			} else {
+				newConnections = append(newConnections, conn)
+			}
+		}
+
+		if removedConn == nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "Connection not found"})
+			return
+		}
+
+		// For personal connections, try to delete the key from GitHub
+		if removedConn.Type == config.ConnectionTypePersonal && removedConn.GitHubKeyID != "" {
+			if err := deleteSSHKeyFromGitHub(removedConn.GitHubKeyID); err != nil {
+				log.Printf("Warning: failed to delete SSH key from GitHub: %v", err)
+			}
+		}
+
+		// Delete local SSH key files
+		if removedConn.SSHKeyPath != "" {
+			os.Remove(removedConn.SSHKeyPath)
+			os.Remove(removedConn.SSHKeyPath + ".pub")
+		}
+
+		// Delete certificate if exists
+		if removedConn.SSHCertPath != "" {
+			os.Remove(removedConn.SSHCertPath)
+		}
+
+		// Update config
+		cfg.User.Connections = newConnections
+		if err := config.SaveUserConfig(&cfg.User); err != nil {
+			log.Printf("Failed to save config: %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "Failed to save configuration"})
+			return
+		}
+
+		// Remove from status tracking
+		delete(connectionStatus, req.ID)
+
+		// Update needs setup flag
+		needsSetup = len(cfg.User.Connections) == 0
+
+		log.Printf("Deleted connection: %s (%s)", removedConn.Name, removedConn.ID)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Connection removed successfully",
+		})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleGHStatus returns the GitHub CLI authentication status
+func handleGHStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	status := checkGHAuth()
+	json.NewEncoder(w).Encode(status)
+}
+
+func servePersonalFormFallback(w http.ResponseWriter, ghInstalled bool) {
+	ghStatus := "not installed"
+	if ghInstalled {
+		ghStatus = "installed"
+	}
+	fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Add GitHub.com Personal</title></head><body>
+		<h1>Add GitHub.com Personal Account</h1>
+		<p>GitHub CLI status: %s</p>
+		<p>This feature is coming soon!</p>
+		<p><a href="/setup">Back to Setup</a></p>
+	</body></html>`, ghStatus)
+}
+
+// =============================================================================
+// GitHub CLI (gh) Helper Functions
+// =============================================================================
+
+// GHAuthStatus represents the authentication status from gh CLI
+type GHAuthStatus struct {
+	Installed     bool   `json:"installed"`
+	Authenticated bool   `json:"authenticated"`
+	Username      string `json:"username"`
+	Scopes        string `json:"scopes"`
+	Error         string `json:"error,omitempty"`
+}
+
+// ghPath stores the cached path to the gh binary
+var ghPath string
+
+// findGHBinary finds the gh binary, checking common Homebrew paths
+// This is necessary because GUI apps don't inherit the user's shell PATH
+func findGHBinary() string {
+	if ghPath != "" {
+		return ghPath
+	}
+
+	// First try the system PATH
+	if path, err := exec.LookPath("gh"); err == nil {
+		ghPath = path
+		return ghPath
+	}
+
+	// Check common Homebrew locations
+	commonPaths := []string{
+		"/opt/homebrew/bin/gh",  // Apple Silicon
+		"/usr/local/bin/gh",     // Intel Mac
+		"/home/linuxbrew/.linuxbrew/bin/gh", // Linux Homebrew
+	}
+
+	for _, path := range commonPaths {
+		if _, err := os.Stat(path); err == nil {
+			ghPath = path
+			return ghPath
+		}
+	}
+
+	return ""
+}
+
+// checkGHInstalled checks if the GitHub CLI is installed
+func checkGHInstalled() bool {
+	return findGHBinary() != ""
+}
+
+// checkGHAuth checks the authentication status of gh CLI
+func checkGHAuth() GHAuthStatus {
+	status := GHAuthStatus{}
+
+	if !checkGHInstalled() {
+		status.Error = "GitHub CLI (gh) is not installed"
+		return status
+	}
+	status.Installed = true
+
+	// Run gh auth status
+	cmd := exec.Command(findGHBinary(), "auth", "status")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		status.Error = "Not authenticated with GitHub CLI"
+		return status
+	}
+
+	status.Authenticated = true
+
+	// Parse output to extract username
+	outputStr := string(output)
+	// Look for "Logged in to github.com account <username>"
+	usernameRegex := regexp.MustCompile(`Logged in to github\.com.*account\s+(\S+)`)
+	if matches := usernameRegex.FindStringSubmatch(outputStr); len(matches) > 1 {
+		status.Username = matches[1]
+	}
+
+	return status
+}
+
+// generateSSHKeyForPersonal generates an SSH key pair for a personal GitHub account
+func generateSSHKeyForPersonal(conn *config.Connection) error {
+	keyPath := conn.SSHKeyPath
+
+	// Ensure .ssh directory exists
+	sshDir := filepath.Dir(keyPath)
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		return fmt.Errorf("failed to create .ssh directory: %w", err)
+	}
+
+	// Check if key already exists
+	if _, err := os.Stat(keyPath); err == nil {
+		log.Printf("SSH key already exists at %s", keyPath)
+		return nil
+	}
+
+	// Generate ED25519 key pair
+	pubKey, privKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return fmt.Errorf("failed to generate key: %w", err)
+	}
+
+	// Write private key
+	privKeyPEM, err := ssh.MarshalPrivateKey(privKey, "cassh personal key")
+	if err != nil {
+		return fmt.Errorf("failed to marshal private key: %w", err)
+	}
+
+	if err := os.WriteFile(keyPath, privKeyPEM.Bytes, 0600); err != nil {
+		return fmt.Errorf("failed to write private key: %w", err)
+	}
+
+	// Write public key
+	sshPubKey, err := ssh.NewPublicKey(pubKey)
+	if err != nil {
+		return fmt.Errorf("failed to create SSH public key: %w", err)
+	}
+
+	pubKeyBytes := ssh.MarshalAuthorizedKey(sshPubKey)
+	pubKeyPath := keyPath + ".pub"
+	if err := os.WriteFile(pubKeyPath, pubKeyBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write public key: %w", err)
+	}
+
+	log.Printf("Generated new SSH key pair at %s", keyPath)
+	return nil
+}
+
+// uploadSSHKeyToGitHub uploads an SSH public key to GitHub using gh CLI
+// Returns the GitHub key ID for later deletion
+func uploadSSHKeyToGitHub(keyPath string, title string) (string, error) {
+	pubKeyPath := keyPath + ".pub"
+
+	// Verify public key exists
+	if _, err := os.Stat(pubKeyPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("public key not found at %s", pubKeyPath)
+	}
+
+	// Use gh CLI to add the key
+	cmd := exec.Command(findGHBinary(), "ssh-key", "add", pubKeyPath, "--title", title)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Check if key already exists
+		if regexp.MustCompile(`already in use`).Match(output) {
+			log.Printf("SSH key already exists on GitHub")
+			// Try to find the key ID
+			keyID := findGitHubKeyIDByTitle(title)
+			return keyID, nil
+		}
+		return "", fmt.Errorf("failed to upload key: %s: %w", string(output), err)
+	}
+
+	log.Printf("Uploaded SSH key to GitHub: %s", title)
+
+	// Get the key ID by listing keys and finding our title
+	keyID := findGitHubKeyIDByTitle(title)
+	return keyID, nil
+}
+
+// findGitHubKeyIDByTitle finds the GitHub SSH key ID by its title
+func findGitHubKeyIDByTitle(title string) string {
+	cmd := exec.Command(findGHBinary(), "ssh-key", "list")
+	output, err := cmd.Output()
+	if err != nil {
+		log.Printf("Failed to list SSH keys: %v", err)
+		return ""
+	}
+
+	// Parse output to find our key
+	// Format: "TITLE    TYPE    ADDED    KEY_ID"
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, title) {
+			fields := strings.Fields(line)
+			if len(fields) >= 4 {
+				// Key ID is typically the last field
+				return fields[len(fields)-1]
+			}
+		}
+	}
+	return ""
+}
+
+// deleteSSHKeyFromGitHub deletes an SSH key from GitHub using gh CLI
+func deleteSSHKeyFromGitHub(keyID string) error {
+	if keyID == "" {
+		return nil // Nothing to delete
+	}
+
+	cmd := exec.Command(findGHBinary(), "ssh-key", "delete", keyID, "--yes")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Check if key doesn't exist (already deleted)
+		if strings.Contains(string(output), "not found") {
+			log.Printf("SSH key %s already deleted from GitHub", keyID)
+			return nil
+		}
+		return fmt.Errorf("failed to delete key %s: %s: %w", keyID, string(output), err)
+	}
+
+	log.Printf("Deleted SSH key %s from GitHub", keyID)
+	return nil
+}
+
+// setupPersonalGitHubSSH generates a key and uploads it to GitHub
+// Updates conn with KeyCreatedAt and GitHubKeyID
+func setupPersonalGitHubSSH(conn *config.Connection) error {
+	// 1. Generate key if needed
+	if err := generateSSHKeyForPersonal(conn); err != nil {
+		return fmt.Errorf("key generation failed: %w", err)
+	}
+
+	// 2. Upload to GitHub
+	keyTitle := fmt.Sprintf("cassh-%s", conn.ID)
+	keyID, err := uploadSSHKeyToGitHub(conn.SSHKeyPath, keyTitle)
+	if err != nil {
+		return fmt.Errorf("key upload failed: %w", err)
+	}
+
+	// 3. Store key metadata
+	conn.GitHubKeyID = keyID
+	conn.KeyCreatedAt = time.Now().Unix()
+
+	return nil
+}
+
+// rotatePersonalGitHubSSH rotates the SSH key for a personal GitHub connection
+// Deletes old key from GitHub, generates new key, uploads new key
+func rotatePersonalGitHubSSH(conn *config.Connection) error {
+	log.Printf("Rotating SSH key for %s", conn.Name)
+
+	// 1. Delete old key from GitHub
+	if conn.GitHubKeyID != "" {
+		if err := deleteSSHKeyFromGitHub(conn.GitHubKeyID); err != nil {
+			log.Printf("Warning: failed to delete old key: %v", err)
+			// Continue anyway - we still want to generate a new key
+		}
+	}
+
+	// 2. Delete local key files
+	os.Remove(conn.SSHKeyPath)
+	os.Remove(conn.SSHKeyPath + ".pub")
+
+	// 3. Generate new key
+	if err := generateSSHKeyForPersonal(conn); err != nil {
+		return fmt.Errorf("key generation failed: %w", err)
+	}
+
+	// 4. Upload new key to GitHub
+	keyTitle := fmt.Sprintf("cassh-%s", conn.ID)
+	keyID, err := uploadSSHKeyToGitHub(conn.SSHKeyPath, keyTitle)
+	if err != nil {
+		return fmt.Errorf("key upload failed: %w", err)
+	}
+
+	// 5. Update connection metadata
+	conn.GitHubKeyID = keyID
+	conn.KeyCreatedAt = time.Now().Unix()
+
+	log.Printf("SSH key rotated for %s (new key ID: %s)", conn.Name, keyID)
+	return nil
+}
+
+// needsKeyRotation checks if a personal connection needs key rotation
+func needsKeyRotation(conn *config.Connection) bool {
+	if conn.Type != config.ConnectionTypePersonal {
+		return false
+	}
+	if conn.KeyRotationHours <= 0 {
+		return false // No rotation configured
+	}
+	if conn.KeyCreatedAt == 0 {
+		return false // No creation time recorded
+	}
+
+	rotationDuration := time.Duration(conn.KeyRotationHours) * time.Hour
+	keyAge := time.Since(time.Unix(conn.KeyCreatedAt, 0))
+
+	return keyAge >= rotationDuration
+}
+
+// checkAndRotateExpiredKeys checks all personal connections and rotates expired keys
+func checkAndRotateExpiredKeys() {
+	// Wait a bit for app to fully initialize
+	time.Sleep(2 * time.Second)
+
+	// Check if gh CLI is available
+	ghStatus := checkGHAuth()
+	if !ghStatus.Installed || !ghStatus.Authenticated {
+		return // Can't rotate keys without gh CLI
+	}
+
+	rotatedCount := 0
+	for i := range cfg.User.Connections {
+		conn := &cfg.User.Connections[i]
+		if needsKeyRotation(conn) {
+			log.Printf("Key rotation needed for %s (age: %v, policy: %dh)",
+				conn.Name,
+				time.Since(time.Unix(conn.KeyCreatedAt, 0)).Round(time.Hour),
+				conn.KeyRotationHours)
+
+			if err := rotatePersonalGitHubSSH(conn); err != nil {
+				log.Printf("Failed to rotate key for %s: %v", conn.Name, err)
+				sendNotification("cassh", fmt.Sprintf("Key rotation failed for %s", conn.Name), false)
+				continue
+			}
+
+			rotatedCount++
+		}
+	}
+
+	// Save config if any keys were rotated
+	if rotatedCount > 0 {
+		if err := config.SaveUserConfig(&cfg.User); err != nil {
+			log.Printf("Failed to save config after key rotation: %v", err)
+		} else {
+			log.Printf("Rotated %d key(s) on startup", rotatedCount)
+			if rotatedCount == 1 {
+				sendNotification("cassh", "SSH key rotated automatically", false)
+			} else {
+				sendNotification("cassh", fmt.Sprintf("%d SSH keys rotated automatically", rotatedCount), false)
+			}
+		}
+	}
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
