@@ -99,7 +99,20 @@ static void setupNotificationDelegate() {
     [center setNotificationCategories:[NSSet setWithObjects:certExpiringCategory, certExpiredCategory, generalCategory, nil]];
 }
 
+// Check if running inside an app bundle (required for UNUserNotificationCenter)
+int isRunningInAppBundle() {
+    NSBundle *mainBundle = [NSBundle mainBundle];
+    NSString *bundlePath = mainBundle.bundlePath;
+    return [bundlePath hasSuffix:@".app"] ? 1 : 0;
+}
+
 void requestNotificationPermission() {
+    // UNUserNotificationCenter requires an app bundle - skip if running as standalone binary
+    if (!isRunningInAppBundle()) {
+        NSLog(@"cassh: Not running in app bundle, notifications disabled");
+        return;
+    }
+
     UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
     [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge)
                           completionHandler:^(BOOL granted, NSError * _Nullable error) {
