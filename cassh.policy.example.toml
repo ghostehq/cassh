@@ -1,29 +1,43 @@
 # cassh Policy Configuration (Example)
-# Copy this to cassh.policy.toml and fill in your values
 #
-# SERVER DEPLOYMENT: Full config needed (OIDC, CA, etc.)
-# CLIENT DEPLOYMENT: Only server_base_url needed
+# For ENTERPRISE deployments: Copy this to cassh.policy.toml and fill in your values
+# For PERSONAL use: The cassh app will guide you through setup on first launch
+#
+# This file is bundled in the app for enterprise deployments where IT
+# controls the configuration. For personal/OSS use, configuration is
+# stored in ~/Library/Application Support/cassh/
 
-# Base URL where cassh-server is running
-server_base_url = "https://cassh.yourcompany.com"
+# ============================================================================
+# CLIENT CONFIGURATION (required for enterprise deployments)
+# ============================================================================
+
+# Base URL where cassh-server is running (enterprise only)
+# Leave empty for personal GitHub.com use - the app will prompt for setup
+server_base_url = ""
+
+# ============================================================================
+# SERVER CONFIGURATION (only needed if running cassh-server)
+# ============================================================================
 
 # Certificate validity in hours (default: 12)
 cert_validity_hours = 12
 
-# OIDC Configuration (SERVER ONLY - not needed for clients)
-# Using Microsoft Entra ID (Azure AD)
+# OIDC Configuration - Microsoft Entra ID (Azure AD)
 [oidc]
-client_id = "your-entra-app-client-id"
-client_secret = "your-entra-client-secret"
-tenant = "your-tenant-id"  # or "common" for multi-tenant
-redirect_url = "https://cassh.yourcompany.com/auth/callback"
+client_id = ""
+client_secret = ""
+tenant = ""
+redirect_url = ""
 
-# CA Configuration (SERVER ONLY)
+# CA Configuration
 [ca]
-private_key_path = "/etc/cassh/ca_key"
+private_key_path = ""
 
-# GitHub Enterprise Configuration (SERVER ONLY)
+# GitHub Enterprise Configuration
 [github]
-enterprise_url = "https://github.yourcompany.com"
+enterprise_url = ""
+# How to derive the SSH certificate principal from OIDC claims
+# Options: "email_prefix" (default), "email", "username"
+principal_source = "email_prefix"
 # Optional: restrict to specific orgs
 # allowed_orgs = ["engineering", "platform"]
