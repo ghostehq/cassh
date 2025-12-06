@@ -1,0 +1,378 @@
+{
+  "fill" : {
+    "automatic-gradient" : "extended-gray:0.00000,1.00000",
+    "orientation" : {
+      "start" : {
+        "x" : 0.5,
+        "y" : 0
+      },
+      "stop" : {
+        "x" : 0.5,
+        "y" : 0.7
+      }
+    }
+  },
+  "groups" : [
+    {
+      "blend-mode-specializations" : [
+        {
+          "value" : "plus-lighter"
+        },
+        {
+          "appearance" : "dark",
+          "value" : "plus-lighter"
+        },
+        {
+          "appearance" : "tinted",
+          "value" : "lighten"
+        }
+      ],
+      "blur-material-specializations" : [
+        {
+          "value" : 1
+        },
+        {
+          "appearance" : "dark",
+          "value" : 1
+        },
+        {
+          "appearance" : "tinted",
+          "value" : 1
+        }
+      ],
+      "hidden" : false,
+      "layers" : [
+        {
+          "glass-specializations" : [
+            {
+              "value" : true
+            },
+            {
+              "appearance" : "dark",
+              "value" : true
+            }
+          ],
+          "image-name" : "4_button_green.svg",
+          "name" : "4_button_green",
+          "position" : {
+            "scale" : 19,
+            "translation-in-points" : [
+              -30,
+              -16
+            ]
+          }
+        },
+        {
+          "glass-specializations" : [
+            {
+              "value" : true
+            },
+            {
+              "appearance" : "dark",
+              "value" : true
+            }
+          ],
+          "image-name" : "3_button_yellow.svg",
+          "name" : "3_button_yellow",
+          "position" : {
+            "scale" : 19,
+            "translation-in-points" : [
+              0,
+              -16
+            ]
+          }
+        },
+        {
+          "glass-specializations" : [
+            {
+              "value" : true
+            },
+            {
+              "appearance" : "dark",
+              "value" : true
+            }
+          ],
+          "image-name" : "2_button_red.svg",
+          "name" : "2_button_red",
+          "position" : {
+            "scale" : 19,
+            "translation-in-points" : [
+              30,
+              -16
+            ]
+          }
+        }
+      ],
+      "lighting-specializations" : [
+        {
+          "appearance" : "dark",
+          "value" : "individual"
+        },
+        {
+          "appearance" : "tinted",
+          "value" : "combined"
+        }
+      ],
+      "name" : "Traffic Lights",
+      "opacity-specializations" : [
+        {
+          "value" : 0.9
+        },
+        {
+          "appearance" : "dark",
+          "value" : 0.9
+        },
+        {
+          "appearance" : "tinted",
+          "value" : 0.9
+        }
+      ],
+      "shadow-specializations" : [
+        {
+          "value" : {
+            "kind" : "layer-color",
+            "opacity" : 1
+          }
+        },
+        {
+          "appearance" : "dark",
+          "value" : {
+            "kind" : "layer-color",
+            "opacity" : 1
+          }
+        },
+        {
+          "appearance" : "tinted",
+          "value" : {
+            "kind" : "neutral",
+            "opacity" : 1
+          }
+        }
+      ],
+      "specular-specializations" : [
+        {
+          "value" : false
+        },
+        {
+          "appearance" : "dark",
+          "value" : false
+        },
+        {
+          "appearance" : "tinted",
+          "value" : false
+        }
+      ],
+      "translucency-specializations" : [
+        {
+          "appearance" : "dark",
+          "value" : {
+            "enabled" : true,
+            "value" : 0.5
+          }
+        },
+        {
+          "appearance" : "tinted",
+          "value" : {
+            "enabled" : true,
+            "value" : 1
+          }
+        }
+      ]
+    },
+    {
+      "blend-mode-specializations" : [
+        {
+          "value" : "plus-lighter"
+        },
+        {
+          "appearance" : "tinted",
+          "value" : "plus-lighter"
+        }
+      ],
+      "blur-material" : 1,
+      "hidden" : true,
+      "layers" : [
+        {
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "6_prompt_cursor.svg",
+          "name" : "6_prompt_cursor"
+        },
+        {
+          "glass" : true,
+          "image-name" : "5_prompt_dollar.svg",
+          "name" : "5_prompt_dollar"
+        }
+      ],
+      "name" : "Term",
+      "position" : {
+        "scale" : 30,
+        "translation-in-points" : [
+          218,
+          -45
+        ]
+      },
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 1
+      },
+      "specular-specializations" : [
+        {
+          "value" : false
+        },
+        {
+          "appearance" : "dark",
+          "value" : false
+        }
+      ],
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    },
+    {
+      "blend-mode" : "normal",
+      "blur-material-specializations" : [
+        {
+          "value" : 1
+        },
+        {
+          "appearance" : "dark",
+          "value" : 1
+        },
+        {
+          "appearance" : "tinted",
+          "value" : 1
+        }
+      ],
+      "hidden" : false,
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "fill" : "automatic",
+          "glass-specializations" : [
+            {
+              "value" : true
+            },
+            {
+              "appearance" : "tinted",
+              "value" : true
+            }
+          ],
+          "hidden" : false,
+          "image-name" : "key.shield 3.svg",
+          "name" : "key.shield 3",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 24.25,
+            "translation-in-points" : [
+              4,
+              93
+            ]
+          }
+        }
+      ],
+      "lighting" : "individual",
+      "name" : "Key",
+      "opacity-specializations" : [
+        {
+          "value" : 1
+        },
+        {
+          "appearance" : "dark",
+          "value" : 1
+        },
+        {
+          "appearance" : "tinted",
+          "value" : 0.9
+        }
+      ],
+      "position" : {
+        "scale" : 1,
+        "translation-in-points" : [
+          0,
+          0
+        ]
+      },
+      "shadow-specializations" : [
+        {
+          "value" : {
+            "kind" : "layer-color",
+            "opacity" : 1
+          }
+        },
+        {
+          "appearance" : "dark",
+          "value" : {
+            "kind" : "layer-color",
+            "opacity" : 1
+          }
+        },
+        {
+          "appearance" : "tinted",
+          "value" : {
+            "kind" : "layer-color",
+            "opacity" : 1
+          }
+        }
+      ],
+      "specular-specializations" : [
+        {
+          "value" : false
+        },
+        {
+          "appearance" : "tinted",
+          "value" : false
+        }
+      ],
+      "translucency-specializations" : [
+        {
+          "value" : {
+            "enabled" : true,
+            "value" : 0.2
+          }
+        },
+        {
+          "appearance" : "tinted",
+          "value" : {
+            "enabled" : true,
+            "value" : 0.5
+          }
+        }
+      ]
+    },
+    {
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "fill" : "automatic",
+          "hidden" : true,
+          "image-name" : "term_iconcomposer.svg",
+          "name" : "term_iconcomposer",
+          "position" : {
+            "scale" : 22.15,
+            "translation-in-points" : [
+              83,
+              -6
+            ]
+          }
+        }
+      ],
+      "name" : "Hide",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
