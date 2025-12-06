@@ -46,3 +46,4 @@ dist/
 *.dmg
 *.pkg
 .DS_Store
+homebrew/README.md

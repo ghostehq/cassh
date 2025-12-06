@@ -23,9 +23,6 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      - name: Install create-dmg
-        run: brew install create-dmg
-
       - name: Build macOS app bundle
         run: make app-bundle VERSION=${{ steps.version.outputs.VERSION }}
 
@@ -67,17 +64,22 @@ jobs:
           # Verify signature
           codesign --verify --verbose build/cassh.app
 
-      - name: Create DMG
-        run: make dmg-only VERSION=${{ steps.version.outputs.VERSION }}
+      - name: Create PKG
+        run: make pkg-only VERSION=${{ steps.version.outputs.VERSION }}
 
-      - name: Sign DMG
+      - name: Sign PKG
         if: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
         env:
           APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
         run: |
-          codesign --force --sign "$APPLE_DEVELOPER_ID" "dist/cassh-${{ steps.version.outputs.VERSION }}.dmg"
+          # Sign the PKG with Developer ID Installer certificate
+          productsign --sign "Developer ID Installer: $APPLE_DEVELOPER_ID" \
+            "dist/cassh-${{ steps.version.outputs.VERSION }}.pkg" \
+            "dist/cassh-${{ steps.version.outputs.VERSION }}-signed.pkg"
+          mv "dist/cassh-${{ steps.version.outputs.VERSION }}-signed.pkg" \
+            "dist/cassh-${{ steps.version.outputs.VERSION }}.pkg"
 
-      - name: Notarize DMG
+      - name: Notarize PKG
         if: ${{ secrets.APPLE_ID != '' }}
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -85,20 +87,20 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           # Submit for notarization
-          xcrun notarytool submit "dist/cassh-${{ steps.version.outputs.VERSION }}.dmg" \
+          xcrun notarytool submit "dist/cassh-${{ steps.version.outputs.VERSION }}.pkg" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait
 
-          # Staple the ticket to the DMG
-          xcrun stapler staple "dist/cassh-${{ steps.version.outputs.VERSION }}.dmg"
+          # Staple the ticket to the PKG
+          xcrun stapler staple "dist/cassh-${{ steps.version.outputs.VERSION }}.pkg"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-release
-          path: dist/*.dmg
+          path: dist/*.pkg
 
   build-linux:
     runs-on: ubuntu-latest
@@ -157,5 +159,57 @@ jobs:
         with:
           body: ${{ steps.changelog.outputs.NOTES }}
           files: |
-            artifacts/macos-release/*.dmg
+            artifacts/macos-release/*.pkg
             artifacts/linux-release/cassh-server-linux-amd64
+
+  update-homebrew:
+    needs: [release]
+    runs-on: ubuntu-latest
+    if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-release
+          path: artifacts
+
+      - name: Calculate SHA256
+        id: sha
+        run: |
+          SHA256=$(shasum -a 256 artifacts/cassh-${{ steps.version.outputs.VERSION }}.pkg | cut -d' ' -f1)
+          echo "SHA256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Update Homebrew Tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          SHA256: ${{ steps.sha.outputs.SHA256 }}
+        run: |
+          # Clone the tap repo
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/shawntz/homebrew-cassh.git
+          cd homebrew-cassh
+
+          # Create Casks directory if it doesn't exist
+          mkdir -p Casks
+
+          # Copy and update the cask formula
+          cp ../homebrew/cassh.rb Casks/cassh.rb
+
+          # Update version and sha256
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/cassh.rb
+          sed -i "s/sha256 \".*\"/sha256 \"${SHA256}\"/" Casks/cassh.rb
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Commit and push
+          git add Casks/cassh.rb
+          git commit -m "Update cassh to v${VERSION}" || echo "No changes to commit"
+          git push
