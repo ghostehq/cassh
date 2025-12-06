@@ -101,6 +101,7 @@ packaging/macos/      # macOS distribution files
 - `CASSH_CA_PRIVATE_KEY` - CA private key content (for cloud, paste full key)
 - `CASSH_CA_PRIVATE_KEY_PATH` - Path to CA private key file (for local/VPS)
 - `CASSH_CERT_VALIDITY_HOURS` - Certificate validity (default: `12`)
+- `CASSH_GITHUB_PRINCIPAL_SOURCE` - How to derive cert principal: `email_prefix` (default), `email`, `username`
 - `CASSH_DEV_MODE` - Set to `true` to skip OIDC, use mock auth
 - `CASSH_LISTEN_ADDR` - Listen address (default: `:8080`)
 - `CASSH_POLICY_PATH` - Path to policy TOML (default: `cassh.policy.toml`)
