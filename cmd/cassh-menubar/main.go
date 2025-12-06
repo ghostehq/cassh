@@ -32,6 +32,9 @@ import (
 //go:embed templates/*
 var templatesFS embed.FS
 
+//go:embed static/*
+var staticFS embed.FS
+
 const (
 	loopbackPort      = 52849     // cassh loopback listener port
 	expiryWarningTime = time.Hour // Warn when cert expires within this duration
@@ -77,8 +80,9 @@ func main() {
 	// Initialize native notifications (request permission)
 	initNotifications()
 
-	// Ensure app starts on login (install LaunchAgent if not present)
-	installLaunchAgent()
+	// Register as login item (triggers system prompt on first run)
+	// Uses SMAppService on macOS 13+, falls back to LaunchAgent on older versions
+	registerAsLoginItem()
 
 	// Load templates for setup wizard
 	var err error
@@ -115,8 +119,14 @@ func main() {
 	// Check if setup is needed (OSS mode with no connections configured)
 	needsSetup = config.NeedsSetup(&cfg.Policy, &cfg.User)
 
-	// If enterprise mode and no connections in user config, create one from policy
-	if config.IsEnterpriseMode(&cfg.Policy) && !cfg.User.HasConnections() {
+	// Only auto-create enterprise connection for true enterprise deployments:
+	// - Policy must have server URL (enterprise mode)
+	// - Policy must be loaded from app bundle (not local dev file)
+	// - User must have no connections yet
+	// - Not in dev mode
+	// This prevents OSS/personal users from seeing an enterprise connection by default
+	policyFromBundle := strings.Contains(policyPath, ".app/Contents/Resources")
+	if config.IsEnterpriseMode(&cfg.Policy) && !cfg.User.HasConnections() && policyFromBundle && !cfg.Policy.IsDevMode() {
 		if conn := config.CreateEnterpriseConnectionFromPolicy(&cfg.Policy); conn != nil {
 			cfg.User.AddConnection(*conn)
 			// Save the connection
@@ -124,6 +134,12 @@ func main() {
 				log.Printf("Warning: Could not save user config: %v", err)
 			}
 		}
+	}
+
+	// For OSS/personal mode: if no connections and policy is not from app bundle, show setup
+	// This ensures personal users always see the setup wizard, even with local policy files
+	if !cfg.User.HasConnections() && !policyFromBundle {
+		needsSetup = true
 	}
 
 	// Initialize connection status for all connections
@@ -228,6 +244,7 @@ func buildConnectionMenu() {
 	systray.AddSeparator()
 
 	menuAddConn = systray.AddMenuItem("+ Add Connection...", "Add another GitHub connection")
+	menuSettings := systray.AddMenuItem("Settings...", "Manage connections and settings")
 
 	systray.AddSeparator()
 
@@ -241,6 +258,8 @@ func buildConnectionMenu() {
 			select {
 			case <-menuAddConn.ClickedCh:
 				openSetupWizard()
+			case <-menuSettings.ClickedCh:
+				openSetupWizard()
 			case <-menuAbout.ClickedCh:
 				showAbout()
 			case <-menuUninstall.ClickedCh:
@@ -252,11 +271,17 @@ func buildConnectionMenu() {
 	}()
 }
 
-// openSetupWizard opens the setup wizard in the browser
+// openSetupWizard opens the setup wizard in a native window
 func openSetupWizard() {
-	setupURL := fmt.Sprintf("http://localhost:%d/setup", loopbackPort)
-	if err := openBrowser(setupURL); err != nil {
-		log.Printf("Error opening setup wizard: %v", err)
+	if runtime.GOOS == "darwin" {
+		// Use native WebView window on macOS
+		openSetupWindow()
+	} else {
+		// Fallback to browser on other platforms
+		setupURL := fmt.Sprintf("http://localhost:%d/setup", loopbackPort)
+		if err := openBrowser(setupURL); err != nil {
+			log.Printf("Error opening setup wizard: %v", err)
+		}
 	}
 }
 
@@ -275,7 +300,7 @@ func handleConnectionAction(connID string) {
 	}
 }
 
-// generateCertForConnection opens browser to generate cert for enterprise connection
+// generateCertForConnection opens WebView to generate cert for enterprise connection
 func generateCertForConnection(conn *config.Connection) {
 	// Ensure SSH key exists
 	if err := ensureSSHKey(conn.SSHKeyPath); err != nil {
@@ -297,9 +322,13 @@ func generateCertForConnection(conn *config.Connection) {
 		url.QueryEscape(string(pubKeyData)),
 	)
 
-	// Open browser
-	if err := openBrowser(authURL); err != nil {
-		log.Printf("Error opening browser: %v", err)
+	// Open in native WebView on macOS, fallback to browser on other platforms
+	if runtime.GOOS == "darwin" {
+		openNativeWebView(authURL, fmt.Sprintf("Sign in - %s", conn.Name), 800, 700)
+	} else {
+		if err := openBrowser(authURL); err != nil {
+			log.Printf("Error opening browser: %v", err)
+		}
 	}
 }
 
@@ -661,17 +690,21 @@ func openBrowser(urlStr string) error {
 }
 
 // sendNotification sends a macOS notification with the app's icon
-// If actionOnClick is true and the notification is clicked, it will trigger cert generation
+// If actionOnClick is true, the notification will have a "Renew Now" action button
 func sendNotification(title, message string, actionOnClick bool) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
 
-	// Use native UserNotifications framework for proper app icon
-	sendNativeNotification(title, message)
-
-	// TODO: Click actions require implementing UNUserNotificationCenterDelegate
-	// For now, the user can click the menu bar icon to regenerate
+	// Use native UserNotifications framework with proper app icon
+	// Category determines the action buttons shown
+	if actionOnClick {
+		// Use CERT_EXPIRING category which has "Renew Now" and "Dismiss" actions
+		sendNotificationWithCategory(title, message, "CERT_EXPIRING")
+	} else {
+		// General notification without actions
+		sendNativeNotification(title, message)
+	}
 }
 
 
@@ -703,40 +736,78 @@ func uninstallCassh() {
 		}
 	}
 
-	// 2. Remove LaunchAgent
-	launchAgentPath := filepath.Join(homeDir, "Library", "LaunchAgents", "com.shawnschwartz.cassh.plist")
-	exec.Command("launchctl", "unload", launchAgentPath).Run()
-	os.Remove(launchAgentPath)
+	// 2. Unregister from login items (SMAppService) and remove LaunchAgent
+	unregisterAsLoginItem()
+	// Remove user-level LaunchAgent
+	userLaunchAgentPath := filepath.Join(homeDir, "Library", "LaunchAgents", "com.shawnschwartz.cassh.plist")
+	exec.Command("launchctl", "unload", userLaunchAgentPath).Run()
+	os.Remove(userLaunchAgentPath)
+	// Remove system-level LaunchAgent (installed by PKG)
+	systemLaunchAgentPath := "/Library/LaunchAgents/com.shawnschwartz.cassh.plist"
+	exec.Command("launchctl", "unload", systemLaunchAgentPath).Run()
+	// System LaunchAgent requires admin to remove - will be handled by the uninstall script
 
-	// 3. Remove Application Support directory
+	// 3. Remove Application Support directory (contains user config)
 	appSupportDir := filepath.Join(homeDir, "Library", "Application Support", "cassh")
-	os.RemoveAll(appSupportDir)
+	if err := os.RemoveAll(appSupportDir); err != nil {
+		log.Printf("Warning: Could not remove Application Support directory: %v", err)
+	}
 
 	// 4. Remove preferences
 	prefsPath := filepath.Join(homeDir, "Library", "Preferences", "com.shawnschwartz.cassh.plist")
 	os.Remove(prefsPath)
 
-	// 5. Get current app path and create uninstall script
+	// 5. Get current app path
 	execPath, _ := os.Executable()
-	appPath := execPath
+	appPath := ""
+
 	// If running from .app bundle, get the .app path
 	if idx := strings.Index(execPath, ".app/"); idx != -1 {
 		appPath = execPath[:idx+4]
 	}
 
-	// Create script to delete the app after we quit
-	// (Can't delete ourselves while running)
-	uninstallScript := fmt.Sprintf(`#!/bin/bash
+	// 6. Create script to delete the app after we quit
+	// Use osascript with admin privileges if the app is in /Applications
+	// Also remove the system-level LaunchAgent installed by PKG
+	var uninstallScript string
+	if strings.HasPrefix(appPath, "/Applications") {
+		// Need admin privileges to delete from /Applications and system LaunchAgent
+		uninstallScript = fmt.Sprintf(`#!/bin/bash
+sleep 1
+if osascript -e 'do shell script "rm -rf \"%s\" /Library/LaunchAgents/com.shawnschwartz.cassh.plist" with prompt "cassh Uninstaller needs to remove the app and system files." with administrator privileges'; then
+    osascript -e 'display notification "cassh has been uninstalled" with title "Uninstall Complete"'
+else
+    osascript -e 'display notification "Could not complete uninstall. You may need to manually delete /Applications/cassh.app" with title "Uninstall Incomplete"'
+fi
+rm -f "$0"
+`, appPath)
+	} else if appPath != "" {
+		// Can delete app without admin privileges, but still try to remove system LaunchAgent
+		uninstallScript = fmt.Sprintf(`#!/bin/bash
 sleep 1
 rm -rf "%s"
+# Try to remove system LaunchAgent (may fail without admin)
+rm -f /Library/LaunchAgents/com.shawnschwartz.cassh.plist 2>/dev/null || true
 osascript -e 'display notification "cassh has been uninstalled" with title "Uninstall Complete"'
+rm -f "$0"
 `, appPath)
+	} else {
+		// Just show notification, no app to delete
+		uninstallScript = `#!/bin/bash
+sleep 1
+osascript -e 'display notification "cassh data has been removed" with title "Uninstall Complete"'
+rm -f "$0"
+`
+	}
 
 	scriptPath := filepath.Join(os.TempDir(), "cassh_uninstall.sh")
-	os.WriteFile(scriptPath, []byte(uninstallScript), 0755)
+	if err := os.WriteFile(scriptPath, []byte(uninstallScript), 0755); err != nil {
+		log.Printf("Warning: Could not create uninstall script: %v", err)
+	}
 
 	// Run the uninstall script in background
-	exec.Command("bash", scriptPath).Start()
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Start()
 
 	// Quit the app
 	log.Println("Uninstalling cassh...")
@@ -811,6 +882,10 @@ func installLaunchAgent() {
 func startLoopbackListener() {
 	mux := http.NewServeMux()
 
+	// Static files (images, etc.)
+	staticHandler := http.FileServer(http.FS(staticFS))
+	mux.Handle("/static/", staticHandler)
+
 	// Setup wizard endpoints
 	mux.HandleFunc("/setup", handleSetup)
 	mux.HandleFunc("/setup/add-enterprise", handleAddEnterprise)
@@ -839,7 +914,10 @@ func startLoopbackListener() {
 
 // handleInstallCert receives the cert from browser (for enterprise connections)
 func handleInstallCert(w http.ResponseWriter, r *http.Request) {
+	log.Printf("handleInstallCert: received %s request from %s", r.Method, r.RemoteAddr)
+
 	if r.Method != http.MethodPost {
+		log.Printf("handleInstallCert: rejecting non-POST method: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -850,12 +928,16 @@ func handleInstallCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("handleInstallCert: failed to decode request body: %v", err)
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
+	log.Printf("handleInstallCert: received cert (%d bytes), connection_id=%q", len(req.Cert), req.ConnectionID)
+
 	// Validate cert
 	if _, err := ca.ParseCertificate([]byte(req.Cert)); err != nil {
+		log.Printf("handleInstallCert: invalid certificate: %v", err)
 		http.Error(w, "Invalid certificate", http.StatusBadRequest)
 		return
 	}
@@ -1087,12 +1169,16 @@ func handleAddEnterprise(w http.ResponseWriter, r *http.Request) {
 
 		log.Printf("Added enterprise connection: %s (%s -> %s)", conn.Name, conn.ServerURL, conn.GitHubHost)
 
-		// Return success
+		// Return success with restart flag
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":    true,
-			"connection": conn,
+			"success":      true,
+			"connection":   conn,
+			"needs_restart": true,
 		})
+
+		// Schedule app restart to rebuild menu
+		go scheduleRestart()
 		return
 	}
 
@@ -1224,13 +1310,17 @@ func handleAddPersonal(w http.ResponseWriter, r *http.Request) {
 
 		log.Printf("Added personal connection: %s (@%s)", conn.Name, conn.GitHubUsername)
 
-		// Return success
+		// Return success with restart flag
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":    true,
-			"connection": conn,
-			"message":    "SSH key generated and uploaded to GitHub!",
+			"success":       true,
+			"connection":    conn,
+			"message":       "SSH key generated and uploaded to GitHub!",
+			"needs_restart": true,
 		})
+
+		// Schedule app restart to rebuild menu
+		go scheduleRestart()
 		return
 	}
 
@@ -1665,6 +1755,46 @@ func checkAndRotateExpiredKeys() {
 			}
 		}
 	}
+}
+
+// scheduleRestart restarts the app to rebuild the menu after adding connections
+func scheduleRestart() {
+	// Wait for the HTTP response to be sent and WebView to close
+	time.Sleep(2 * time.Second)
+
+	// Close the WebView window
+	closeNativeWebView()
+
+	// Get current executable path and derive app bundle path
+	execPath, err := os.Executable()
+	if err != nil {
+		log.Printf("Failed to get executable path: %v", err)
+		return
+	}
+
+	log.Println("Restarting app to apply changes...")
+
+	// For app bundles, use 'open' to relaunch properly
+	// execPath is like /Applications/cassh.app/Contents/MacOS/cassh
+	// We need to find the .app bundle path
+	appPath := execPath
+	if idx := strings.Index(execPath, ".app/"); idx != -1 {
+		appPath = execPath[:idx+4] // Include ".app"
+	}
+
+	// Use 'open' to relaunch the app bundle (works correctly with macOS)
+	cmd := exec.Command("open", "-n", "-a", appPath)
+	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to relaunch app: %v", err)
+		// Fallback to direct execution
+		cmd = exec.Command(execPath)
+		if err := cmd.Start(); err != nil {
+			log.Printf("Fallback restart also failed: %v", err)
+		}
+	}
+
+	// Quit current instance
+	systray.Quit()
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
