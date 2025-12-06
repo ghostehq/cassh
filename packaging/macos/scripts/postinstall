@@ -8,6 +8,7 @@ APP_PATH="/Applications/cassh.app"
 POLICY_PATH="$APP_PATH/Contents/Resources/cassh.policy.toml"
 LAUNCH_AGENT_SRC="$APP_PATH/Contents/Resources/com.shawnschwartz.cassh.plist"
 LAUNCH_AGENT_DST="/Library/LaunchAgents/com.shawnschwartz.cassh.plist"
+LABEL="com.shawnschwartz.cassh"
 
 # Make policy file immutable
 if [ -f "$POLICY_PATH" ]; then
@@ -22,10 +23,28 @@ if [ -f "$LAUNCH_AGENT_SRC" ]; then
   chown root:wheel "$LAUNCH_AGENT_DST"
 fi
 
-# Load LaunchAgent for current console user (RunAtLoad=true will start it)
+# Get current console user
 CONSOLE_USER=$(stat -f "%Su" /dev/console)
-if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
-  sudo -u "$CONSOLE_USER" launchctl load "$LAUNCH_AGENT_DST" 2>/dev/null || true
+CONSOLE_UID=$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")
+
+if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ] && [ -n "$CONSOLE_UID" ]; then
+  # Kill any existing cassh process
+  pkill -f "cassh.app" 2>/dev/null || true
+  sleep 1
+
+  # Unload old LaunchAgent if exists (ignore errors)
+  sudo -u "$CONSOLE_USER" launchctl bootout "gui/$CONSOLE_UID/$LABEL" 2>/dev/null || true
+  launchctl bootout "gui/$CONSOLE_UID/$LABEL" 2>/dev/null || true
+
+  # Load LaunchAgent for current user using modern launchctl
+  # Try bootstrap first (modern), fall back to load (legacy)
+  if ! launchctl bootstrap "gui/$CONSOLE_UID" "$LAUNCH_AGENT_DST" 2>/dev/null; then
+    sudo -u "$CONSOLE_USER" launchctl load "$LAUNCH_AGENT_DST" 2>/dev/null || true
+  fi
+
+  # Start the app immediately
+  sleep 1
+  sudo -u "$CONSOLE_USER" open -a "$APP_PATH" 2>/dev/null || true
 fi
 
 exit 0
