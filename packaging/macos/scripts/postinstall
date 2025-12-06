@@ -22,7 +22,7 @@ if [ -f "$LAUNCH_AGENT_SRC" ]; then
   chown root:wheel "$LAUNCH_AGENT_DST"
 fi
 
-# Load LaunchAgent for current console user
+# Load LaunchAgent for current console user (RunAtLoad=true will start it)
 CONSOLE_USER=$(stat -f "%Su" /dev/console)
 if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
   sudo -u "$CONSOLE_USER" launchctl load "$LAUNCH_AGENT_DST" 2>/dev/null || true
