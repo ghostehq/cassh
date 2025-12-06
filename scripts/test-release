@@ -1,0 +1,192 @@
+#!/bin/bash
+# test-release - Build and test cassh release locally
+#
+# Usage:
+#   ./scripts/test-release              # Build and test unsigned
+#   ./scripts/test-release --sign       # Build, sign, and test
+#   ./scripts/test-release --fresh      # Clear existing config before testing
+#   ./scripts/test-release --pkg        # Open PKG installer instead of app
+#   ./scripts/test-release --help       # Show help
+#
+# Environment variables (can be set in .env file):
+#   APPLE_DEVELOPER_ID      - Developer ID for code signing
+#   APPLE_TEAM_ID           - Apple Team ID
+#   APPLE_KEYCHAIN_PROFILE  - Keychain profile for notarization
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Default options
+SIGN=false
+FRESH=false
+OPEN_PKG=false
+NOTARIZE=false
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --sign)
+            SIGN=true
+            shift
+            ;;
+        --fresh)
+            FRESH=true
+            shift
+            ;;
+        --pkg)
+            OPEN_PKG=true
+            shift
+            ;;
+        --notarize)
+            NOTARIZE=true
+            SIGN=true  # Notarization requires signing
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: $0 [options]"
+            echo ""
+            echo "Options:"
+            echo "  --sign       Sign the app with Developer ID"
+            echo "  --fresh      Clear existing config for fresh install test"
+            echo "  --pkg        Open PKG installer instead of app directly"
+            echo "  --notarize   Sign and notarize (requires --sign)"
+            echo "  --help       Show this help"
+            echo ""
+            echo "Environment variables (set in .env file):"
+            echo "  APPLE_DEVELOPER_ID      Developer ID for signing"
+            echo "  APPLE_TEAM_ID           Apple Team ID"
+            echo "  APPLE_KEYCHAIN_PROFILE  Keychain profile for notarization"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            exit 1
+            ;;
+    esac
+done
+
+# Load .env file if it exists
+if [[ -f "$PROJECT_DIR/.env" ]]; then
+    echo -e "${BLUE}Loading environment from .env...${NC}"
+    set -a
+    source "$PROJECT_DIR/.env"
+    set +a
+fi
+
+# Print banner
+echo -e "${BLUE}"
+echo "╔═══════════════════════════════════════════╗"
+echo "║       cassh Release Test Builder          ║"
+echo "╚═══════════════════════════════════════════╝"
+echo -e "${NC}"
+
+cd "$PROJECT_DIR"
+
+# Step 1: Clean build artifacts
+echo -e "${YELLOW}[1/6]${NC} Cleaning build artifacts..."
+make clean
+
+# Step 2: Build app bundle (OSS mode)
+echo -e "${YELLOW}[2/6]${NC} Building app bundle (OSS mode)..."
+make app-bundle-oss
+
+# Step 3: Sign if requested
+if [[ "$SIGN" == true ]]; then
+    if [[ -z "$APPLE_DEVELOPER_ID" ]]; then
+        echo -e "${RED}Error: APPLE_DEVELOPER_ID not set${NC}"
+        echo "Set it in .env or export it before running"
+        exit 1
+    fi
+
+    echo -e "${YELLOW}[3/6]${NC} Signing app bundle..."
+    echo "  Developer ID: $APPLE_DEVELOPER_ID"
+    make sign
+else
+    echo -e "${YELLOW}[3/6]${NC} Skipping code signing (use --sign to enable)"
+fi
+
+# Step 4: Build PKG
+echo -e "${YELLOW}[4/6]${NC} Building PKG installer..."
+make pkg
+
+# Step 5: Notarize if requested
+if [[ "$NOTARIZE" == true ]]; then
+    if [[ -z "$APPLE_KEYCHAIN_PROFILE" ]]; then
+        echo -e "${RED}Error: APPLE_KEYCHAIN_PROFILE not set${NC}"
+        echo "Set it in .env or run: xcrun notarytool store-credentials"
+        exit 1
+    fi
+
+    echo -e "${YELLOW}[5/6]${NC} Submitting for notarization..."
+    echo "  Keychain Profile: $APPLE_KEYCHAIN_PROFILE"
+
+    # Build DMG for notarization
+    sudo make dmg
+
+    xcrun notarytool submit dist/cassh-*.dmg \
+        --keychain-profile "$APPLE_KEYCHAIN_PROFILE" \
+        --wait
+
+    echo "Stapling notarization ticket..."
+    xcrun stapler staple dist/cassh-*.dmg
+else
+    echo -e "${YELLOW}[5/6]${NC} Skipping notarization (use --notarize to enable)"
+fi
+
+# Step 6: Clear config if fresh install requested
+if [[ "$FRESH" == true ]]; then
+    echo -e "${YELLOW}[6/6]${NC} Clearing existing config for fresh install test..."
+
+    # Kill any running instance
+    pkill -f "cassh.app" 2>/dev/null || true
+
+    # Remove config
+    rm -rf ~/Library/Application\ Support/cassh/
+    rm -f ~/Library/LaunchAgents/com.shawnschwartz.cassh.plist
+
+    # Unload LaunchAgent if loaded
+    launchctl unload ~/Library/LaunchAgents/com.shawnschwartz.cassh.plist 2>/dev/null || true
+
+    echo -e "${GREEN}  Config cleared!${NC}"
+else
+    echo -e "${YELLOW}[6/6]${NC} Keeping existing config (use --fresh to clear)"
+fi
+
+# Print build info
+echo ""
+echo -e "${GREEN}╔═══════════════════════════════════════════╗"
+echo -e "║           Build Complete!                 ║"
+echo -e "╚═══════════════════════════════════════════╝${NC}"
+echo ""
+echo "Build artifacts:"
+ls -la build/cassh.app 2>/dev/null && echo ""
+ls -la dist/*.pkg 2>/dev/null && echo ""
+
+# Open for testing
+echo ""
+if [[ "$OPEN_PKG" == true ]]; then
+    echo -e "${BLUE}Opening PKG installer...${NC}"
+    open dist/cassh-*.pkg
+else
+    echo -e "${BLUE}Opening app directly...${NC}"
+    open build/cassh.app
+fi
+
+echo ""
+echo -e "${GREEN}Done!${NC} The app should now be running."
+echo ""
+echo "Tips:"
+echo "  - Check menu bar for the terminal icon"
+echo "  - Setup wizard should open automatically on first run"
+echo "  - Use --fresh flag to test first-run experience"
+echo "  - Use --pkg flag to test the installer"
