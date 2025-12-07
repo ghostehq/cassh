@@ -173,7 +173,7 @@ func main() {
 
 func onReady() {
 	systray.SetTemplateIcon(terminalIcon, terminalIcon)
-	systray.SetTooltip("cassh - SSH Certificate Manager")
+	systray.SetTooltip(fmt.Sprintf("cassh v%s", version))
 
 	if needsSetup {
 		// Setup mode - show setup wizard prompt
@@ -205,6 +205,8 @@ func onReady() {
 
 		menuUpdates := setupUpdateMenu()
 		menuAbout := systray.AddMenuItem("About cassh", "About this application")
+		menuVersion := systray.AddMenuItem(fmt.Sprintf("Version %s", version), "")
+		menuVersion.Disable()
 
 		systray.AddSeparator()
 
@@ -326,6 +328,8 @@ func buildConnectionMenu() {
 
 	menuUpdates := setupUpdateMenu()
 	menuAbout := systray.AddMenuItem("About cassh", "About this application")
+	menuVersion := systray.AddMenuItem(fmt.Sprintf("Version %s", version), "")
+	menuVersion.Disable()
 
 	systray.AddSeparator()
 

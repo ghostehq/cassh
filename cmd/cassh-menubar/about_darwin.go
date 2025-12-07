@@ -10,8 +10,9 @@ package main
 
 void showAboutDialog(const char *version, const char *buildCommit) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *nsVersion = [NSString stringWithUTF8String:version];
-        NSString *nsBuildCommit = [NSString stringWithUTF8String:buildCommit];
+        // Handle nil/empty strings safely
+        NSString *nsVersion = (version && strlen(version) > 0) ? [NSString stringWithUTF8String:version] : @"dev";
+        NSString *nsBuildCommit = (buildCommit && strlen(buildCommit) > 0) ? [NSString stringWithUTF8String:buildCommit] : @"dev";
 
         // Create the about window
         NSWindow *aboutWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 360, 320)

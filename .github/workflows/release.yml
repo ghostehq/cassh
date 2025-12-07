@@ -28,10 +28,15 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION from tag: $GITHUB_REF_NAME"
 
       - name: Build macOS app bundle
-        run: make app-bundle VERSION=${{ steps.version.outputs.VERSION }}
+        run: |
+          echo "Building with VERSION=${{ steps.version.outputs.VERSION }}"
+          make app-bundle VERSION=${{ steps.version.outputs.VERSION }}
 
       - name: Import signing certificate
         if: env.APPLE_CERTIFICATE_BASE64 != ''

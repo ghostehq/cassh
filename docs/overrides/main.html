@@ -2,4 +2,70 @@
 
 {% block extrahead %}
   <script async src="https://cdn.seline.com/seline.js" data-token="2162fe5e9da2b07"></script>
+  <style>
+    .md-version-badge {
+      display: inline-flex;
+      align-items: center;
+      margin-right: 0.6rem;
+      font-size: 0.65rem;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .md-version-badge.loaded {
+      opacity: 1;
+    }
+    .md-version-badge a {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.25rem 0.6rem;
+      border-radius: 2rem;
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--md-primary-bg-color);
+      text-decoration: none;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .md-version-badge a:hover {
+      background: rgba(255, 255, 255, 0.22);
+    }
+    .md-version-badge svg {
+      width: 0.85rem;
+      height: 0.85rem;
+      margin-right: 0.35rem;
+    }
+  </style>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Create version badge element
+      var badge = document.createElement('div');
+      badge.className = 'md-version-badge';
+      badge.id = 'version-badge';
+      badge.innerHTML = '<a href="https://github.com/shawntz/cassh/releases" title="View releases">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor">' +
+        '<path d="M1 7.775V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 0 1 0 2.474l-5.026 5.026a1.75 1.75 0 0 1-2.474 0l-6.25-6.25A1.752 1.752 0 0 1 1 7.775Zm1.5 0c0 .066.026.13.073.177l6.25 6.25a.25.25 0 0 0 .354 0l5.025-5.025a.25.25 0 0 0 0-.354l-6.25-6.25a.25.25 0 0 0-.177-.073H2.75a.25.25 0 0 0-.25.25ZM6 5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/>' +
+        '</svg>' +
+        '<span id="version-text">v...</span>' +
+        '</a>';
+
+      // Insert before the search form in the header
+      var search = document.querySelector('.md-search');
+      if (search && search.parentNode) {
+        search.parentNode.insertBefore(badge, search);
+      }
+
+      // Fetch latest version from GitHub
+      fetch('https://api.github.com/repos/shawntz/cassh/releases/latest')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.tag_name) {
+            document.getElementById('version-text').textContent = data.tag_name;
+            document.getElementById('version-badge').classList.add('loaded');
+          }
+        })
+        .catch(function() {
+          document.getElementById('version-text').textContent = 'v1.0.0';
+          document.getElementById('version-badge').classList.add('loaded');
+        });
+    });
+  </script>
 {% endblock %}
