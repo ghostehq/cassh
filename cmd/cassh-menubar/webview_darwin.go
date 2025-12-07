@@ -109,6 +109,9 @@ void openWebViewWindow(const char* urlStr, const char* title, int width, int hei
         // Center on screen
         [setupWindow center];
 
+        // Float above other windows (utility panel behavior)
+        [setupWindow setLevel:NSFloatingWindowLevel];
+
         // Create WebView configuration
         WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
 
