@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>cassh Setup</title>
+    <title>cassh Settings</title>
     <style>
         * {
             box-sizing: border-box;
@@ -317,6 +317,30 @@
             color: #888;
             font-size: 0.9rem;
         }
+        .parsed-info {
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 12px;
+            margin: -8px 0 16px 0;
+        }
+        .parsed-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+        }
+        .parsed-label {
+            color: #888;
+            font-size: 0.85rem;
+        }
+        .parsed-value {
+            color: #4ade80;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.85rem;
+        }
+        .parsed-value.error {
+            color: #f87171;
+        }
     </style>
 </head>
 <body>
@@ -362,14 +386,38 @@
                     <p class="hint">A friendly name for this connection</p>
                 </div>
                 <div class="form-group">
+                    <label for="enterprise-ssh-url">SSH Clone URL (from any repo)</label>
+                    <input type="text" id="enterprise-ssh-url" placeholder="e.g., user_123@github.company.com:org/repo.git" required oninput="parseSSHUrl()">
+                    <p class="hint">Copy any SSH clone URL from your GitHub Enterprise</p>
+                </div>
+                <div id="parsed-info" class="parsed-info" style="display: none;">
+                    <div class="parsed-item">
+                        <span class="parsed-label">GitHub Host:</span>
+                        <span id="parsed-host" class="parsed-value">-</span>
+                    </div>
+                    <div class="parsed-item">
+                        <span class="parsed-label">SSH Username:</span>
+                        <span id="parsed-user" class="parsed-value">-</span>
+                    </div>
+                </div>
+                <div class="form-group">
                     <label for="enterprise-server">cassh Server URL</label>
                     <input type="url" id="enterprise-server" placeholder="https://cassh.yourcompany.com" required>
                     <p class="hint">The URL of your organization's cassh server</p>
                 </div>
+                <div class="form-group" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 16px; margin-top: 8px;">
+                    <label style="font-weight: 600; color: #fff; margin-bottom: 12px; display: block;">Git Identity (optional)</label>
+                    <p class="hint" style="margin-top: -8px; margin-bottom: 12px;">Configure git user.name and user.email for repos on this GitHub Enterprise</p>
+                </div>
                 <div class="form-group">
-                    <label for="enterprise-github">GitHub Enterprise URL</label>
-                    <input type="url" id="enterprise-github" placeholder="https://github.yourcompany.com" required>
-                    <p class="hint">Your GitHub Enterprise instance URL</p>
+                    <label for="enterprise-git-name">Git Name</label>
+                    <input type="text" id="enterprise-git-name" placeholder="e.g., John Doe">
+                    <p class="hint">Used for git commits on this connection</p>
+                </div>
+                <div class="form-group">
+                    <label for="enterprise-git-email">Git Email</label>
+                    <input type="email" id="enterprise-git-email" placeholder="e.g., john.doe@company.com">
+                    <p class="hint">Used for git commits on this connection</p>
                 </div>
                 <div id="enterprise-error" class="error" style="display: none;"></div>
                 <div id="enterprise-success" class="success" style="display: none;"></div>
@@ -420,6 +468,20 @@
                     </select>
                     <p class="hint">How often to automatically rotate your SSH key</p>
                 </div>
+                <div class="form-group" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 16px; margin-top: 8px;">
+                    <label style="font-weight: 600; color: #fff; margin-bottom: 12px; display: block;">Git Identity (optional)</label>
+                    <p class="hint" style="margin-top: -8px; margin-bottom: 12px;">Configure git user.name and user.email for personal repos</p>
+                </div>
+                <div class="form-group">
+                    <label for="personal-git-name">Git Name</label>
+                    <input type="text" id="personal-git-name" placeholder="e.g., John Doe">
+                    <p class="hint">Used for git commits on this connection</p>
+                </div>
+                <div class="form-group">
+                    <label for="personal-git-email">Git Email</label>
+                    <input type="email" id="personal-git-email" placeholder="e.g., john@example.com">
+                    <p class="hint">Used for git commits on this connection</p>
+                </div>
                 <div id="personal-error" class="error" style="display: none;"></div>
                 <div id="personal-success" class="success" style="display: none;"></div>
                 <div class="btn-group">
@@ -443,6 +505,51 @@
             document.getElementById(type + '-success').style.display = 'none';
         }
 
+        // Parse SSH clone URL to extract hostname and username
+        // Formats: user@host:org/repo.git or ssh://user@host/org/repo.git
+        function parseSSHUrl() {
+            const input = document.getElementById('enterprise-ssh-url').value.trim();
+            const parsedInfo = document.getElementById('parsed-info');
+            const hostEl = document.getElementById('parsed-host');
+            const userEl = document.getElementById('parsed-user');
+
+            if (!input) {
+                parsedInfo.style.display = 'none';
+                return { host: '', user: '' };
+            }
+
+            parsedInfo.style.display = 'block';
+            let host = '', user = '';
+
+            // Try format: user@host:path
+            const scpMatch = input.match(/^([^@]+)@([^:]+):/);
+            if (scpMatch) {
+                user = scpMatch[1];
+                host = scpMatch[2];
+            } else {
+                // Try format: ssh://user@host/path
+                const sshMatch = input.match(/^ssh:\/\/([^@]+)@([^\/]+)/);
+                if (sshMatch) {
+                    user = sshMatch[1];
+                    host = sshMatch[2];
+                }
+            }
+
+            if (host && user) {
+                hostEl.textContent = host;
+                hostEl.className = 'parsed-value';
+                userEl.textContent = user;
+                userEl.className = 'parsed-value';
+            } else {
+                hostEl.textContent = 'Invalid format';
+                hostEl.className = 'parsed-value error';
+                userEl.textContent = 'Invalid format';
+                userEl.className = 'parsed-value error';
+            }
+
+            return { host, user };
+        }
+
         async function submitEnterprise(e) {
             e.preventDefault();
             const errorEl = document.getElementById('enterprise-error');
@@ -450,10 +557,21 @@
             errorEl.style.display = 'none';
             successEl.style.display = 'none';
 
+            // Parse the SSH URL
+            const { host, user } = parseSSHUrl();
+            if (!host || !user) {
+                errorEl.textContent = 'Invalid SSH clone URL. Expected format: user@host:org/repo.git';
+                errorEl.style.display = 'block';
+                return;
+            }
+
             const data = {
                 name: document.getElementById('enterprise-name').value,
                 server_url: document.getElementById('enterprise-server').value,
-                github_host: document.getElementById('enterprise-github').value
+                github_host: host,
+                github_username: user,
+                git_name: document.getElementById('enterprise-git-name').value.trim(),
+                git_email: document.getElementById('enterprise-git-email').value.trim()
             };
 
             try {
@@ -491,7 +609,9 @@
             const data = {
                 name: document.getElementById('personal-name').value,
                 github_username: document.getElementById('personal-username').value,
-                key_rotation_hours: parseInt(document.getElementById('personal-rotation').value, 10)
+                key_rotation_hours: parseInt(document.getElementById('personal-rotation').value, 10),
+                git_name: document.getElementById('personal-git-name').value.trim(),
+                git_email: document.getElementById('personal-git-email').value.trim()
             };
 
             try {
@@ -552,24 +672,29 @@
 
         // Delete a connection
         async function deleteConnection(id, name) {
+            console.log('deleteConnection called with id:', id, 'name:', name);
             if (!confirm(`Are you sure you want to remove "${name}"? This will delete the SSH key from GitHub and your local machine.`)) {
                 return;
             }
 
             try {
+                console.log('Sending delete request for id:', id);
                 const response = await fetch('/setup/delete-connection', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ id })
                 });
 
+                console.log('Response status:', response.status);
                 const result = await response.json();
+                console.log('Response result:', result);
                 if (result.error) {
                     alert('Failed to remove connection: ' + result.error);
                 } else {
                     loadConnections();
                 }
             } catch (err) {
+                console.error('Delete connection error:', err);
                 alert('Failed to remove connection: ' + err.message);
             }
         }
