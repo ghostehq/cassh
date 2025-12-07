@@ -102,6 +102,7 @@ type UserConfig struct {
 	RefreshIntervalSeconds int    `toml:"refresh_interval_seconds"`
 	NotificationSound      bool   `toml:"notification_sound"`
 	PreferredMeme          string `toml:"preferred_meme"` // "lsp", "sloth", or "random"
+	ShowInDock             bool   `toml:"show_in_dock"`   // Show app icon in Dock
 
 	// Connections (enterprise and/or personal GitHub accounts)
 	Connections []Connection `toml:"connections"`
