@@ -56,6 +56,7 @@ var (
 	// Menu items
 	menuStatus      *systray.MenuItem
 	menuConnections []*systray.MenuItem // Dynamic list of connection menu items
+	menuRevokeItems []*systray.MenuItem // Dynamic list of revoke menu items
 	menuAddConn     *systray.MenuItem
 	menuQuit        *systray.MenuItem
 
@@ -121,6 +122,9 @@ func main() {
 	cfg = config.MergeConfigs(policy, userCfg)
 	connectionStatus = make(map[string]*ConnectionStatus)
 
+	// Apply visibility settings (dock/menu bar)
+	applyVisibilitySettings()
+
 	// Check if setup is needed (OSS mode with no connections configured)
 	needsSetup = config.NeedsSetup(&cfg.Policy, &cfg.User)
 
@@ -182,16 +186,28 @@ func onReady() {
 
 		systray.AddSeparator()
 
-		menuHelp := systray.AddMenuItem("Help & Documentation", "View cassh documentation")
-		menuBugReport := systray.AddMenuItem("Report a Bug", "Report an issue on GitHub")
-		menuFeatureRequest := systray.AddMenuItem("Request a Feature", "Suggest a new feature")
-		menuContribute := systray.AddMenuItem("Contribute", "Contribute to cassh on GitHub")
-		menuDonate := systray.AddMenuItem("Donate / Sponsor", "Support cassh development")
-		menuShare := systray.AddMenuItem("Send your friends some cassh...", "Share cassh with friends")
+		// Help submenu
+		menuHelp := systray.AddMenuItem("Help", "Help and support options")
+		menuHelpDocs := menuHelp.AddSubMenuItem("Documentation", "View cassh documentation")
+		menuHelpBug := menuHelp.AddSubMenuItem("Report a Bug", "Report an issue on GitHub")
+		menuHelpFeature := menuHelp.AddSubMenuItem("Request a Feature", "Suggest a new feature")
+
+		// Community submenu
+		menuCommunity := systray.AddMenuItem("Community", "Community and support")
+		menuCommunityContribute := menuCommunity.AddSubMenuItem("Contribute", "Contribute to cassh on GitHub")
+		menuCommunitySponsor := menuCommunity.AddSubMenuItem("Sponsor", "Support cassh development")
+		menuCommunityShare := menuCommunity.AddSubMenuItem("Share cassh...", "Share cassh with friends")
+
+		// Appearance submenu
+		setupVisibilityMenu()
 
 		systray.AddSeparator()
 
+		menuUpdates := setupUpdateMenu()
 		menuAbout := systray.AddMenuItem("About cassh", "About this application")
+
+		systray.AddSeparator()
+
 		menuUninstall := systray.AddMenuItem("Uninstall cassh...", "Remove cassh from your system")
 		menuQuit = systray.AddMenuItem("Quit", "Quit cassh")
 
@@ -201,18 +217,22 @@ func onReady() {
 				select {
 				case <-menuAddConn.ClickedCh:
 					openSetupWizard()
-				case <-menuHelp.ClickedCh:
+				case <-menuHelpDocs.ClickedCh:
 					openBrowser("https://shawnschwartz.com/cassh")
-				case <-menuBugReport.ClickedCh:
+				case <-menuHelpBug.ClickedCh:
 					openBrowser("https://github.com/shawntz/cassh/issues/new?template=bug_report.md")
-				case <-menuFeatureRequest.ClickedCh:
+				case <-menuHelpFeature.ClickedCh:
 					openBrowser("https://github.com/shawntz/cassh/issues/new?template=feature_request.md")
-				case <-menuContribute.ClickedCh:
+				case <-menuCommunityContribute.ClickedCh:
 					openBrowser("https://github.com/shawntz/cassh?tab=contributing-ov-file")
-				case <-menuDonate.ClickedCh:
+				case <-menuCommunitySponsor.ClickedCh:
 					openBrowser("https://github.com/sponsors/shawntz")
-				case <-menuShare.ClickedCh:
-					showShareSheet()
+				case <-menuCommunityShare.ClickedCh:
+					showShareDialog()
+				case <-menuShowInDock.ClickedCh:
+					handleShowInDockToggle()
+				case <-menuUpdates.ClickedCh:
+					handleUpdateMenuClick()
 				case <-menuAbout.ClickedCh:
 					showAbout()
 				case <-menuUninstall.ClickedCh:
@@ -222,6 +242,9 @@ func onReady() {
 				}
 			}
 		}()
+
+		// Check for updates in background
+		go checkForUpdatesBackground()
 
 		// Auto-open setup wizard on first launch
 		go func() {
@@ -250,8 +273,10 @@ func buildConnectionMenu() {
 		}
 		actionItem := systray.AddMenuItem(fmt.Sprintf("  %s", actionText), fmt.Sprintf("Generate/renew for %s", conn.Name))
 
-		// Add revoke item for this connection
+		// Add revoke item for this connection (starts disabled until cert is verified)
 		revokeItem := systray.AddMenuItem("  Revoke Certificate", fmt.Sprintf("Revoke certificate for %s", conn.Name))
+		revokeItem.Disable() // Disabled by default, enabled when cert is active
+		menuRevokeItems = append(menuRevokeItems, revokeItem)
 
 		// Capture connection for closure
 		connID := conn.ID
@@ -282,16 +307,28 @@ func buildConnectionMenu() {
 
 	systray.AddSeparator()
 
-	menuHelp := systray.AddMenuItem("Help & Documentation", "View cassh documentation")
-	menuBugReport := systray.AddMenuItem("Report a Bug", "Report an issue on GitHub")
-	menuFeatureRequest := systray.AddMenuItem("Request a Feature", "Suggest a new feature")
-	menuContribute := systray.AddMenuItem("Contribute", "Contribute to cassh on GitHub")
-	menuDonate := systray.AddMenuItem("Donate / Sponsor", "Support cassh development")
-	menuShare := systray.AddMenuItem("Share cassh...", "Share cassh with friends")
+	// Help submenu
+	menuHelp := systray.AddMenuItem("Help", "Help and support options")
+	menuHelpDocs := menuHelp.AddSubMenuItem("Documentation", "View cassh documentation")
+	menuHelpBug := menuHelp.AddSubMenuItem("Report a Bug", "Report an issue on GitHub")
+	menuHelpFeature := menuHelp.AddSubMenuItem("Request a Feature", "Suggest a new feature")
+
+	// Community submenu
+	menuCommunity := systray.AddMenuItem("Community", "Community and support")
+	menuCommunityContribute := menuCommunity.AddSubMenuItem("Contribute", "Contribute to cassh on GitHub")
+	menuCommunitySponsor := menuCommunity.AddSubMenuItem("Sponsor", "Support cassh development")
+	menuCommunityShare := menuCommunity.AddSubMenuItem("Share cassh...", "Share cassh with friends")
+
+	// Appearance submenu
+	setupVisibilityMenu()
 
 	systray.AddSeparator()
 
+	menuUpdates := setupUpdateMenu()
 	menuAbout := systray.AddMenuItem("About cassh", "About this application")
+
+	systray.AddSeparator()
+
 	menuUninstall := systray.AddMenuItem("Uninstall cassh...", "Remove cassh from your system")
 	menuQuit = systray.AddMenuItem("Quit", "Quit cassh")
 
@@ -303,18 +340,22 @@ func buildConnectionMenu() {
 				openSetupWizard()
 			case <-menuSettings.ClickedCh:
 				openSetupWizard()
-			case <-menuHelp.ClickedCh:
+			case <-menuHelpDocs.ClickedCh:
 				openBrowser("https://shawnschwartz.com/cassh")
-			case <-menuBugReport.ClickedCh:
+			case <-menuHelpBug.ClickedCh:
 				openBrowser("https://github.com/shawntz/cassh/issues/new?template=bug_report.md")
-			case <-menuFeatureRequest.ClickedCh:
+			case <-menuHelpFeature.ClickedCh:
 				openBrowser("https://github.com/shawntz/cassh/issues/new?template=feature_request.md")
-			case <-menuContribute.ClickedCh:
+			case <-menuCommunityContribute.ClickedCh:
 				openBrowser("https://github.com/shawntz/cassh")
-			case <-menuDonate.ClickedCh:
+			case <-menuCommunitySponsor.ClickedCh:
 				openBrowser("https://github.com/sponsors/shawntz")
-			case <-menuShare.ClickedCh:
-				showShareSheet()
+			case <-menuCommunityShare.ClickedCh:
+				showShareDialog()
+			case <-menuShowInDock.ClickedCh:
+				handleShowInDockToggle()
+			case <-menuUpdates.ClickedCh:
+				handleUpdateMenuClick()
 			case <-menuAbout.ClickedCh:
 				showAbout()
 			case <-menuUninstall.ClickedCh:
@@ -324,6 +365,9 @@ func buildConnectionMenu() {
 			}
 		}
 	}()
+
+	// Check for updates in background
+	go checkForUpdatesBackground()
 }
 
 // openSetupWizard opens the setup wizard in a native window
@@ -510,6 +554,10 @@ func updateConnectionStatus(connIdx int) {
 		if connIdx < len(menuConnections) {
 			menuConnections[connIdx].SetTitle(statusText)
 		}
+		// Enable revoke button since cert is valid
+		if connIdx < len(menuRevokeItems) {
+			menuRevokeItems[connIdx].Enable()
+		}
 	} else {
 		// Personal connection - check if key exists
 		if _, err := os.Stat(conn.SSHKeyPath); err != nil {
@@ -555,6 +603,10 @@ func updateConnectionStatus(connIdx int) {
 		if connIdx < len(menuConnections) {
 			menuConnections[connIdx].SetTitle(statusText)
 		}
+		// Enable revoke button since key is valid
+		if connIdx < len(menuRevokeItems) {
+			menuRevokeItems[connIdx].Enable()
+		}
 	}
 }
 
@@ -572,6 +624,11 @@ func setConnectionStatusInvalid(connIdx int, reason string, isExpired bool) {
 	}
 
 	menuConnections[connIdx].SetTitle(fmt.Sprintf("🔴 %s - %s", conn.Name, reason))
+
+	// Disable revoke button since cert/key is not valid
+	if connIdx < len(menuRevokeItems) {
+		menuRevokeItems[connIdx].Disable()
+	}
 }
 
 // monitorConnections periodically checks all connection statuses
