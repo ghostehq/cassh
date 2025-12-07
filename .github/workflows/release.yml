@@ -82,6 +82,7 @@ jobs:
         run: make pkg-only VERSION=${{ steps.version.outputs.VERSION }}
 
       - name: Sign PKG
+        id: sign_pkg
         if: env.APPLE_CERTIFICATE_BASE64 != ''
         run: |
           # Check if Developer ID Installer certificate exists
@@ -92,13 +93,15 @@ jobs:
               "dist/cassh-${{ steps.version.outputs.VERSION }}-signed.pkg"
             mv "dist/cassh-${{ steps.version.outputs.VERSION }}-signed.pkg" \
               "dist/cassh-${{ steps.version.outputs.VERSION }}.pkg"
+            echo "signed=true" >> $GITHUB_OUTPUT
           else
             echo "WARNING: Developer ID Installer certificate not found, PKG will be unsigned"
             echo "To sign PKGs, export both 'Developer ID Application' and 'Developer ID Installer' certificates to your p12 file"
+            echo "signed=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Notarize PKG
-        if: env.APPLE_ID != ''
+        if: env.APPLE_ID != '' && steps.sign_pkg.outputs.signed == 'true'
         run: |
           # Submit for notarization
           xcrun notarytool submit "dist/cassh-${{ steps.version.outputs.VERSION }}.pkg" \
