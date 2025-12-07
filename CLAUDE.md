@@ -115,6 +115,11 @@ cp ~/Library/Application\ Support/cassh/config.toml ~/.config/cassh/config.toml
 - `internal/oidc/oidc.go` - `StartAuth()` / `HandleCallback()` - Entra OIDC flow
 - `cmd/cassh-menubar/main.go` - Menu bar app with loopback listener and URL scheme handler
 - `cmd/cassh-menubar/urlhandler_darwin.go` - `cassh://` URL scheme handling for certificate installation
+- `cmd/cassh-menubar/webview_darwin.go` - Native WebKit window for setup wizard (seamless titlebar, Edit menu)
+- `cmd/cassh-menubar/updater.go` - GitHub Releases update checker with AppleScript dialogs
+- `cmd/cassh-menubar/share_darwin.go` - Native share popup dialog with copy button
+- `cmd/cassh-menubar/about_darwin.go` - Native about window
+- `cmd/cassh-menubar/appvisibility_darwin.go` - Dock visibility toggle (NSApplicationActivationPolicy)
 
 ## Environment Variables
 
@@ -226,3 +231,48 @@ Place meme images in `cmd/cassh-server/static/images/`:
 - `sloth.png` - Flash from Zootopia
 
 Templates fall back to emoji if images missing.
+
+## Menu Bar App UI
+
+### Menu Structure
+
+```
+[Connection Name]: [Status] (disabled status label)
+  Generate / Renew (or "Refresh Key" for personal)
+  Revoke Certificate (disabled until cert active)
+---
++ Add Connection...
+Settings...
+---
+Help >
+  Documentation
+  Report a Bug
+  Request a Feature
+Community >
+  Contribute
+  Sponsor
+  Share cassh...
+Appearance >
+  [x] Show in Dock
+---
+Check for Updates...
+About cassh
+---
+Uninstall cassh...
+Quit
+```
+
+### Native UI Components
+
+- **Setup Window**: WebKit WebView with seamless titlebar, screen-height sizing, Edit menu for copy/paste
+- **Share Dialog**: Native NSWindow with copy button and animated checkmark
+- **About Window**: Native NSWindow with app icon, version, and links
+- **Update Dialog**: AppleScript `display dialog` for native appearance without CGO threading issues
+
+### Dock Visibility
+
+The app can run as:
+- **Menu bar only** (accessory mode): `NSApplicationActivationPolicyAccessory`
+- **Menu bar + Dock** (regular mode): `NSApplicationActivationPolicyRegular`
+
+User preference saved in `config.toml` as `show_in_dock = true/false`.
