@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - 2025-12-06
+## [1.0.0] - 2025-12-07
 
 ### Initial Release! 🎉
 
@@ -15,7 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > Whether you're a solo developer managing personal projects or an enterprise team with hundreds of engineers,
 cassh brings security best practices to your SSH workflow — without the complexity.
-
 
 ### Summary of Core Features
 
@@ -49,6 +48,12 @@ cassh brings security best practices to your SSH workflow — without the comple
 - **GitHub Enterprise SSH certificate extensions**: Certificates now include the required `login@HOSTNAME=USERNAME` extension for GitHub Enterprise authentication
 - **Custom URL scheme (`cassh://`)**: Certificate installation from HTTPS pages now uses the `cassh://install-cert` URL scheme to bypass mixed-content browser restrictions
 - **SCIM username support**: SSH config for enterprise connections now uses the SCIM-provisioned username (from SSH clone URL) instead of hardcoded `git`
+- **Share popup dialog**: Native macOS popup with copyable share link and animated checkmark button (replaces clipboard-only notification)
+- **Update checker**: Check for updates via GitHub Releases API with native macOS dialogs
+  - Shows "You're on the latest version" or "Update available" with download option
+  - Background check on startup with menu indicator when update available
+- **Dock visibility toggle**: Appearance submenu with "Show in Dock" checkbox to toggle between menu bar only and dock + menu bar modes
+- **Edit menu for webview**: Standard Edit menu (Cut/Copy/Paste/Undo/Redo/Select All) for keyboard shortcuts in setup wizard forms
 
 ### Menu Bar App
 
@@ -127,3 +132,4 @@ cassh brings security best practices to your SSH workflow — without the comple
 - **Certificate rejection on GHE**: GitHub Enterprise rejected certificates missing the `login@` extension; certificates now include proper extensions
 - **SSH connection failures**: Enterprise SSH connections failed with "Permission denied" when using wrong SSH username; now correctly uses SCIM-provisioned username from clone URL
 - **Double app launch on install**: PKG postinstall script was launching two instances; fixed by removing redundant `open` command (LaunchAgent handles startup)
+- **Copy/paste in webview forms**: Added Edit menu to enable Cmd+C/Cmd+V keyboard shortcuts in setup wizard input fields
