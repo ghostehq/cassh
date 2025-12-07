@@ -77,6 +77,8 @@ type Connection struct {
 	// For personal: "github.com"
 	GitHubHost string `toml:"github_host"`
 
+	// GitHub username for SSH connections
+	// For enterprise: the SSH username from clone URL (e.g., "yourcorp_123456" from "yourcorp_123456@yourcorp.ghe.com:org/repo.git")
 	// For personal: GitHub username (from gh auth)
 	GitHubUsername string `toml:"github_username,omitempty"`
 

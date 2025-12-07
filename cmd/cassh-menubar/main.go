@@ -182,6 +182,15 @@ func onReady() {
 
 		systray.AddSeparator()
 
+		menuHelp := systray.AddMenuItem("Help & Documentation", "View cassh documentation")
+		menuBugReport := systray.AddMenuItem("Report a Bug", "Report an issue on GitHub")
+		menuFeatureRequest := systray.AddMenuItem("Request a Feature", "Suggest a new feature")
+		menuContribute := systray.AddMenuItem("Contribute", "Contribute to cassh on GitHub")
+		menuDonate := systray.AddMenuItem("Donate / Sponsor", "Support cassh development")
+		menuShare := systray.AddMenuItem("Send your friends some cassh...", "Share cassh with friends")
+
+		systray.AddSeparator()
+
 		menuAbout := systray.AddMenuItem("About cassh", "About this application")
 		menuUninstall := systray.AddMenuItem("Uninstall cassh...", "Remove cassh from your system")
 		menuQuit = systray.AddMenuItem("Quit", "Quit cassh")
@@ -192,6 +201,18 @@ func onReady() {
 				select {
 				case <-menuAddConn.ClickedCh:
 					openSetupWizard()
+				case <-menuHelp.ClickedCh:
+					openBrowser("https://shawnschwartz.com/cassh")
+				case <-menuBugReport.ClickedCh:
+					openBrowser("https://github.com/shawntz/cassh/issues/new?template=bug_report.md")
+				case <-menuFeatureRequest.ClickedCh:
+					openBrowser("https://github.com/shawntz/cassh/issues/new?template=feature_request.md")
+				case <-menuContribute.ClickedCh:
+					openBrowser("https://github.com/shawntz/cassh?tab=contributing-ov-file")
+				case <-menuDonate.ClickedCh:
+					openBrowser("https://github.com/sponsors/shawntz")
+				case <-menuShare.ClickedCh:
+					showShareSheet()
 				case <-menuAbout.ClickedCh:
 					showAbout()
 				case <-menuUninstall.ClickedCh:
@@ -261,6 +282,15 @@ func buildConnectionMenu() {
 
 	systray.AddSeparator()
 
+	menuHelp := systray.AddMenuItem("Help & Documentation", "View cassh documentation")
+	menuBugReport := systray.AddMenuItem("Report a Bug", "Report an issue on GitHub")
+	menuFeatureRequest := systray.AddMenuItem("Request a Feature", "Suggest a new feature")
+	menuContribute := systray.AddMenuItem("Contribute", "Contribute to cassh on GitHub")
+	menuDonate := systray.AddMenuItem("Donate / Sponsor", "Support cassh development")
+	menuShare := systray.AddMenuItem("Share cassh...", "Share cassh with friends")
+
+	systray.AddSeparator()
+
 	menuAbout := systray.AddMenuItem("About cassh", "About this application")
 	menuUninstall := systray.AddMenuItem("Uninstall cassh...", "Remove cassh from your system")
 	menuQuit = systray.AddMenuItem("Quit", "Quit cassh")
@@ -273,6 +303,18 @@ func buildConnectionMenu() {
 				openSetupWizard()
 			case <-menuSettings.ClickedCh:
 				openSetupWizard()
+			case <-menuHelp.ClickedCh:
+				openBrowser("https://shawnschwartz.com/cassh")
+			case <-menuBugReport.ClickedCh:
+				openBrowser("https://github.com/shawntz/cassh/issues/new?template=bug_report.md")
+			case <-menuFeatureRequest.ClickedCh:
+				openBrowser("https://github.com/shawntz/cassh/issues/new?template=feature_request.md")
+			case <-menuContribute.ClickedCh:
+				openBrowser("https://github.com/shawntz/cassh")
+			case <-menuDonate.ClickedCh:
+				openBrowser("https://github.com/sponsors/shawntz")
+			case <-menuShare.ClickedCh:
+				showShareSheet()
 			case <-menuAbout.ClickedCh:
 				showAbout()
 			case <-menuUninstall.ClickedCh:
@@ -347,6 +389,11 @@ func revokeConnectionCert(connID string, connIdx int) {
 	updateConnectionStatus(connIdx)
 
 	log.Printf("Certificate revoked for connection: %s", conn.Name)
+
+	// Send notification
+	sendNotification("Certificate Revoked",
+		fmt.Sprintf("%s certificate has been revoked.", conn.Name),
+		false)
 }
 
 // generateCertForConnection opens WebView to generate cert for enterprise connection
@@ -801,20 +848,28 @@ func ensureSSHConfigForConnection(conn *config.Connection) error {
 
 	// Build the expected host entry based on connection type
 	var hostEntry string
+
+	// Determine SSH user - for enterprise, use the SCIM-provisioned username from clone URL
+	// For personal/github.com, always use "git"
+	sshUser := "git"
+	if conn.Type == config.ConnectionTypeEnterprise && conn.GitHubUsername != "" {
+		sshUser = conn.GitHubUsername
+	}
+
 	if conn.Type == config.ConnectionTypeEnterprise {
 		// Enterprise: use certificate auth
 		hostEntry = fmt.Sprintf(`
 # Added by cassh for %s (enterprise certificate auth)
 Host %s
     HostName %s
-    User git
+    User %s
     IdentityFile %s
     CertificateFile %s
     IdentitiesOnly yes
     IdentityAgent none
-`, conn.Name, conn.GitHubHost, conn.GitHubHost, conn.SSHKeyPath, conn.SSHCertPath)
+`, conn.Name, conn.GitHubHost, conn.GitHubHost, sshUser, conn.SSHKeyPath, conn.SSHCertPath)
 	} else {
-		// Personal: use key-only auth
+		// Personal: use key-only auth (always User git for github.com)
 		hostEntry = fmt.Sprintf(`
 # Added by cassh for %s (personal key auth)
 Host %s
@@ -865,6 +920,147 @@ Host %s
 	return nil
 }
 
+// ensureGitConfigForConnection sets up git configuration for a connection
+// Uses includeIf to apply different user.name/email based on remote URL
+func ensureGitConfigForConnection(conn *config.Connection, userName, userEmail string) error {
+	if conn.GitHubHost == "" || (userName == "" && userEmail == "") {
+		return nil // No host or no git identity to configure
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home dir: %w", err)
+	}
+
+	// Create cassh config directory
+	casshConfigDir := filepath.Join(homeDir, ".config", "cassh")
+	if err := os.MkdirAll(casshConfigDir, 0755); err != nil {
+		return fmt.Errorf("failed to create cassh config dir: %w", err)
+	}
+
+	// Create per-connection gitconfig file
+	connGitConfigPath := filepath.Join(casshConfigDir, fmt.Sprintf("gitconfig-%s", conn.ID))
+	var gitConfigContent strings.Builder
+	gitConfigContent.WriteString(fmt.Sprintf("# Git config for %s (%s)\n", conn.Name, conn.GitHubHost))
+	gitConfigContent.WriteString("# Managed by cassh - do not edit manually\n")
+	gitConfigContent.WriteString("[user]\n")
+	if userName != "" {
+		gitConfigContent.WriteString(fmt.Sprintf("    name = %s\n", userName))
+	}
+	if userEmail != "" {
+		gitConfigContent.WriteString(fmt.Sprintf("    email = %s\n", userEmail))
+	}
+
+	if err := os.WriteFile(connGitConfigPath, []byte(gitConfigContent.String()), 0644); err != nil {
+		return fmt.Errorf("failed to write connection gitconfig: %w", err)
+	}
+
+	// Add includeIf to ~/.gitconfig for this host
+	gitConfigPath := filepath.Join(homeDir, ".gitconfig")
+	includeDirective := fmt.Sprintf(`
+# cassh: Include config for %s
+[includeIf "hasconfig:remote.*.url:%s@%s:**"]
+    path = %s
+[includeIf "hasconfig:remote.*.url:ssh://%s@%s/**"]
+    path = %s
+`, conn.Name, conn.GitHubUsername, conn.GitHubHost, connGitConfigPath,
+		conn.GitHubUsername, conn.GitHubHost, connGitConfigPath)
+
+	// For personal github.com, use git@github.com pattern
+	if conn.Type == config.ConnectionTypePersonal {
+		includeDirective = fmt.Sprintf(`
+# cassh: Include config for %s
+[includeIf "hasconfig:remote.*.url:git@%s:**"]
+    path = %s
+[includeIf "hasconfig:remote.*.url:ssh://git@%s/**"]
+    path = %s
+`, conn.Name, conn.GitHubHost, connGitConfigPath, conn.GitHubHost, connGitConfigPath)
+	}
+
+	// Check if gitconfig exists and if it already has this include
+	if _, err := os.Stat(gitConfigPath); err == nil {
+		content, err := os.ReadFile(gitConfigPath)
+		if err != nil {
+			return fmt.Errorf("failed to read gitconfig: %w", err)
+		}
+		// Check if we already have an includeIf for this connection
+		if strings.Contains(string(content), fmt.Sprintf("cassh: Include config for %s", conn.Name)) {
+			log.Printf("Git config already has includeIf for %s", conn.Name)
+			// Update the per-connection file anyway in case identity changed
+			return nil
+		}
+	}
+
+	// Append includeIf to gitconfig
+	f, err := os.OpenFile(gitConfigPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open gitconfig: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(includeDirective); err != nil {
+		return fmt.Errorf("failed to write gitconfig: %w", err)
+	}
+
+	log.Printf("Added git config for %s (%s)", conn.GitHubHost, conn.Name)
+	return nil
+}
+
+// removeGitConfigForConnection removes the git configuration for a connection
+func removeGitConfigForConnection(conn *config.Connection) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home dir: %w", err)
+	}
+
+	// Remove the per-connection gitconfig file
+	casshConfigDir := filepath.Join(homeDir, ".config", "cassh")
+	connGitConfigPath := filepath.Join(casshConfigDir, fmt.Sprintf("gitconfig-%s", conn.ID))
+	if err := os.Remove(connGitConfigPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: failed to remove connection gitconfig: %v", err)
+	}
+
+	// Remove includeIf from ~/.gitconfig
+	gitConfigPath := filepath.Join(homeDir, ".gitconfig")
+	if _, err := os.Stat(gitConfigPath); err != nil {
+		return nil // No gitconfig, nothing to remove
+	}
+
+	content, err := os.ReadFile(gitConfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to read gitconfig: %w", err)
+	}
+
+	// Remove the cassh section for this connection
+	lines := strings.Split(string(content), "\n")
+	var newLines []string
+	skipUntilBlank := false
+	marker := fmt.Sprintf("# cassh: Include config for %s", conn.Name)
+
+	for _, line := range lines {
+		if strings.Contains(line, marker) {
+			skipUntilBlank = true
+			continue
+		}
+		if skipUntilBlank {
+			// Skip includeIf lines until we hit a blank line or new section
+			if strings.TrimSpace(line) == "" || (strings.HasPrefix(line, "[") && !strings.HasPrefix(line, "[includeIf")) {
+				skipUntilBlank = false
+				newLines = append(newLines, line)
+			}
+			continue
+		}
+		newLines = append(newLines, line)
+	}
+
+	if err := os.WriteFile(gitConfigPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
+		return fmt.Errorf("failed to write gitconfig: %w", err)
+	}
+
+	log.Printf("Removed git config for %s", conn.Name)
+	return nil
+}
+
 func openBrowser(urlStr string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -896,6 +1092,34 @@ func sendNotification(title, message string, actionOnClick bool) {
 	}
 }
 
+// formatDuration formats a duration into a human-readable string
+func formatDuration(d time.Duration) string {
+	if d < 0 {
+		return "expired"
+	}
+
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+
+	if hours >= 24 {
+		days := hours / 24
+		hours = hours % 24
+		if hours > 0 {
+			return fmt.Sprintf("%dd %dh", days, hours)
+		}
+		return fmt.Sprintf("%d days", days)
+	}
+
+	if hours > 0 {
+		if minutes > 0 {
+			return fmt.Sprintf("%dh %dm", hours, minutes)
+		}
+		return fmt.Sprintf("%d hours", hours)
+	}
+
+	return fmt.Sprintf("%d minutes", minutes)
+}
+
 
 // uninstallCassh removes cassh and all its data from the system
 func uninstallCassh() {
@@ -923,6 +1147,9 @@ func uninstallCassh() {
 		if conn.SSHCertPath != "" {
 			os.Remove(conn.SSHCertPath)
 		}
+
+		// Remove git config for this connection
+		removeGitConfigForConnection(&conn)
 	}
 
 	// 2. Unregister from login items (SMAppService) and remove LaunchAgent
@@ -942,11 +1169,17 @@ func uninstallCassh() {
 		log.Printf("Warning: Could not remove Application Support directory: %v", err)
 	}
 
-	// 4. Remove preferences
+	// 4. Remove cassh config directory (contains git configs)
+	casshConfigDir := filepath.Join(homeDir, ".config", "cassh")
+	if err := os.RemoveAll(casshConfigDir); err != nil {
+		log.Printf("Warning: Could not remove cassh config directory: %v", err)
+	}
+
+	// 5. Remove preferences
 	prefsPath := filepath.Join(homeDir, "Library", "Preferences", "com.shawnschwartz.cassh.plist")
 	os.Remove(prefsPath)
 
-	// 5. Get current app path
+	// 6. Get current app path
 	execPath, _ := os.Executable()
 	appPath := ""
 
@@ -955,26 +1188,39 @@ func uninstallCassh() {
 		appPath = execPath[:idx+4]
 	}
 
-	// 6. Create script to delete the app after we quit
+	// 7. Create script to delete the app after we quit
 	// Use osascript with admin privileges if the app is in /Applications
 	// Also remove the system-level LaunchAgent installed by PKG
 	var uninstallScript string
 	if strings.HasPrefix(appPath, "/Applications") {
 		// Need admin privileges to delete from /Applications and system LaunchAgent
+		// Use a separate AppleScript file to avoid escaping issues
 		uninstallScript = fmt.Sprintf(`#!/bin/bash
-sleep 1
-if osascript -e 'do shell script "rm -rf \"%s\" /Library/LaunchAgents/com.shawnschwartz.cassh.plist" with prompt "cassh Uninstaller needs to remove the app and system files." with administrator privileges'; then
-    osascript -e 'display notification "cassh has been uninstalled" with title "Uninstall Complete"'
+sleep 2
+APP_PATH='%s'
+LAUNCH_AGENT='/Library/LaunchAgents/com.shawnschwartz.cassh.plist'
+
+# Create AppleScript to run with admin privileges
+cat > /tmp/cassh_uninstall.scpt << 'APPLESCRIPT'
+do shell script "rm -rf '/Applications/cassh.app' '/Library/LaunchAgents/com.shawnschwartz.cassh.plist' 2>/dev/null || true" with prompt "cassh needs to remove the application." with administrator privileges
+APPLESCRIPT
+
+if osascript /tmp/cassh_uninstall.scpt 2>/dev/null; then
+    osascript -e 'display notification "cassh has been uninstalled successfully." with title "Uninstall Complete"'
 else
-    osascript -e 'display notification "Could not complete uninstall. You may need to manually delete /Applications/cassh.app" with title "Uninstall Incomplete"'
+    # Try without admin as fallback (in case app was moved)
+    rm -rf "$APP_PATH" 2>/dev/null
+    osascript -e 'display notification "cassh uninstall may be incomplete. Check /Applications manually." with title "Uninstall"'
 fi
+
+rm -f /tmp/cassh_uninstall.scpt
 rm -f "$0"
 `, appPath)
 	} else if appPath != "" {
 		// Can delete app without admin privileges, but still try to remove system LaunchAgent
 		uninstallScript = fmt.Sprintf(`#!/bin/bash
-sleep 1
-rm -rf "%s"
+sleep 2
+rm -rf '%s'
 # Try to remove system LaunchAgent (may fail without admin)
 rm -f /Library/LaunchAgents/com.shawnschwartz.cassh.plist 2>/dev/null || true
 osascript -e 'display notification "cassh has been uninstalled" with title "Uninstall Complete"'
@@ -983,7 +1229,7 @@ rm -f "$0"
 	} else {
 		// Just show notification, no app to delete
 		uninstallScript = `#!/bin/bash
-sleep 1
+sleep 2
 osascript -e 'display notification "cassh data has been removed" with title "Uninstall Complete"'
 rm -f "$0"
 `
@@ -994,9 +1240,14 @@ rm -f "$0"
 		log.Printf("Warning: Could not create uninstall script: %v", err)
 	}
 
-	// Run the uninstall script in background
+	// Run the uninstall script in background and detach it
 	cmd := exec.Command("bash", scriptPath)
-	cmd.Start()
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("Warning: Could not start uninstall script: %v", err)
+	}
 
 	// Quit the app
 	log.Println("Uninstalling cassh...")
@@ -1179,13 +1430,18 @@ func handleInstallCert(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("Certificate installed successfully")
 
-	// Send activation notification
+	// Parse cert to get expiration info
+	parsedCert, _ := ca.ParseCertificate([]byte(req.Cert))
+	certInfo := ca.GetCertInfo(parsedCert)
+
+	// Send activation notification with time remaining
 	connName := "GitHub Enterprise"
 	if conn != nil {
 		connName = conn.Name
 	}
-	sendNotification("cassh Certificate Activated",
-		fmt.Sprintf("Your SSH certificate for %s is now active.", connName),
+	timeRemaining := formatDuration(certInfo.TimeLeft)
+	sendNotification("Certificate Activated",
+		fmt.Sprintf("%s is now active. Valid for %s.", connName, timeRemaining),
 		false)
 
 	// Update connection status
@@ -1295,9 +1551,12 @@ func handleAddEnterprise(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		// Parse JSON request
 		var req struct {
-			Name       string `json:"name"`
-			ServerURL  string `json:"server_url"`
-			GitHubHost string `json:"github_host"`
+			Name           string `json:"name"`
+			ServerURL      string `json:"server_url"`
+			GitHubHost     string `json:"github_host"`
+			GitHubUsername string `json:"github_username"`
+			GitName        string `json:"git_name"`
+			GitEmail       string `json:"git_email"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1322,18 +1581,25 @@ func handleAddEnterprise(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if req.GitHubUsername == "" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"error": "GitHub SSH username is required (from SSH clone URL)"})
+			return
+		}
+
 		// Create connection
 		homeDir, _ := os.UserHomeDir()
 		connID := fmt.Sprintf("enterprise-%d", time.Now().Unix())
 
 		conn := config.Connection{
-			ID:          connID,
-			Type:        config.ConnectionTypeEnterprise,
-			Name:        req.Name,
-			ServerURL:   req.ServerURL,
-			GitHubHost:  config.ExtractHostFromURL(req.GitHubHost),
-			SSHKeyPath:  filepath.Join(homeDir, ".ssh", fmt.Sprintf("cassh_%s_id_ed25519", connID)),
-			SSHCertPath: filepath.Join(homeDir, ".ssh", fmt.Sprintf("cassh_%s_id_ed25519-cert.pub", connID)),
+			ID:             connID,
+			Type:           config.ConnectionTypeEnterprise,
+			Name:           req.Name,
+			ServerURL:      req.ServerURL,
+			GitHubHost:     config.ExtractHostFromURL(req.GitHubHost),
+			GitHubUsername: req.GitHubUsername,
+			SSHKeyPath:     filepath.Join(homeDir, ".ssh", fmt.Sprintf("cassh_%s_id_ed25519", connID)),
+			SSHCertPath:    filepath.Join(homeDir, ".ssh", fmt.Sprintf("cassh_%s_id_ed25519-cert.pub", connID)),
 		}
 
 		// Add connection to config
@@ -1356,13 +1622,25 @@ func handleAddEnterprise(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Warning: failed to update SSH config: %v", err)
 		}
 
+		// Set up git config for this connection (if git identity provided)
+		if req.GitName != "" || req.GitEmail != "" {
+			if err := ensureGitConfigForConnection(&conn, req.GitName, req.GitEmail); err != nil {
+				log.Printf("Warning: failed to set up git config: %v", err)
+			}
+		}
+
 		log.Printf("Added enterprise connection: %s (%s -> %s)", conn.Name, conn.ServerURL, conn.GitHubHost)
+
+		// Send notification for new connection
+		sendNotification("Connection Added",
+			fmt.Sprintf("%s has been configured. Click the menu bar icon to generate your first certificate.", conn.Name),
+			false)
 
 		// Return success with restart flag
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":      true,
-			"connection":   conn,
+			"success":       true,
+			"connection":    conn,
 			"needs_restart": true,
 		})
 
@@ -1413,6 +1691,8 @@ func handleAddPersonal(w http.ResponseWriter, r *http.Request) {
 			Name             string `json:"name"`
 			GitHubUsername   string `json:"github_username"`
 			KeyRotationHours int    `json:"key_rotation_hours"`
+			GitName          string `json:"git_name"`
+			GitEmail         string `json:"git_email"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1497,7 +1777,19 @@ func handleAddPersonal(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Warning: failed to update SSH config: %v", err)
 		}
 
+		// Set up git config for this connection (if git identity provided)
+		if req.GitName != "" || req.GitEmail != "" {
+			if err := ensureGitConfigForConnection(&conn, req.GitName, req.GitEmail); err != nil {
+				log.Printf("Warning: failed to set up git config: %v", err)
+			}
+		}
+
 		log.Printf("Added personal connection: %s (@%s)", conn.Name, conn.GitHubUsername)
+
+		// Send notification for new connection
+		sendNotification("Connection Added",
+			fmt.Sprintf("%s is ready to use. SSH key uploaded to GitHub.", conn.Name),
+			false)
 
 		// Return success with restart flag
 		w.Header().Set("Content-Type", "application/json")
@@ -1518,18 +1810,24 @@ func handleAddPersonal(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteConnection removes a connection from the configuration
 func handleDeleteConnection(w http.ResponseWriter, r *http.Request) {
+	log.Printf("handleDeleteConnection called: method=%s", r.Method)
+
 	if r.Method == http.MethodPost || r.Method == http.MethodDelete {
 		var req struct {
 			ID string `json:"id"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			log.Printf("handleDeleteConnection: decode error: %v", err)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
 			return
 		}
 
+		log.Printf("handleDeleteConnection: request ID=%s", req.ID)
+
 		if req.ID == "" {
+			log.Printf("handleDeleteConnection: empty ID")
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"error": "Connection ID is required"})
 			return
@@ -1568,6 +1866,11 @@ func handleDeleteConnection(w http.ResponseWriter, r *http.Request) {
 		// Delete certificate if exists
 		if removedConn.SSHCertPath != "" {
 			os.Remove(removedConn.SSHCertPath)
+		}
+
+		// Remove git config for this connection
+		if err := removeGitConfigForConnection(removedConn); err != nil {
+			log.Printf("Warning: failed to remove git config: %v", err)
 		}
 
 		// Update config
